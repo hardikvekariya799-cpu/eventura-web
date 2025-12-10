@@ -55,7 +55,7 @@ export default function CalendarPage() {
           </p>
 
           <section className="eventura-middle">
-            {/* Left: Today */}
+            {/* Left: "Today & this week" */}
             <div className="eventura-panel">
               <h2 className="eventura-panel-title">Today</h2>
               <p className="eventura-small-text">
@@ -78,7 +78,7 @@ export default function CalendarPage() {
               </ul>
             </div>
 
-            {/* Right: Simple month grid */}
+            {/* Right: Simple month grid placeholder */}
             <div className="eventura-panel">
               <h2 className="eventura-panel-title">Monthly calendar (basic)</h2>
               <p className="eventura-small-text">
