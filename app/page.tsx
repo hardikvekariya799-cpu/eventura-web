@@ -3,97 +3,46 @@
 import React, { useEffect, useState } from "react";
 import Link from "next/link";
 
-type EventItem = {
-  id: number;
-  client: string;
-  date: string;
-  venue: string;
-  guests: string;
-  budget: string;
-  status: string;
-  notes: string;
-};
+type Role = "CEO" | "Staff";
+type User = { name: string; role: Role };
 
-const STORAGE_KEY = "eventura-events";
+const USER_KEY = "eventura-user";
 
-export default function EventsPage() {
-  const [events, setEvents] = useState<EventItem[]>([]);
-  const [form, setForm] = useState<Omit<EventItem, "id">>({
-    client: "",
-    date: "",
-    venue: "",
-    guests: "",
-    budget: "",
-    status: "Proposal sent",
-    notes: "",
-  });
+export default function Home() {
+  const [user, setUser] = useState<User | null>(null);
+  const [eventsMonth, setEventsMonth] = useState("12");
+  const [expectedRevenue, setExpectedRevenue] = useState("18.5 Lakh");
+  const [leadsPipeline, setLeadsPipeline] = useState("23");
 
-  // Load events from localStorage
   useEffect(() => {
     if (typeof window === "undefined") return;
+    const raw = window.localStorage.getItem(USER_KEY);
+    if (!raw) {
+      window.location.href = "/login";
+      return;
+    }
     try {
-      const raw = window.localStorage.getItem(STORAGE_KEY);
-      if (raw) {
-        setEvents(JSON.parse(raw));
-      }
-    } catch (e) {
-      console.error("Failed to load events from storage", e);
+      setUser(JSON.parse(raw));
+    } catch {
+      window.localStorage.removeItem(USER_KEY);
+      window.location.href = "/login";
     }
   }, []);
 
-  // Save events to localStorage
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(events));
-  }, [events]);
-
-  function handleChange(
-    e:
-      | React.ChangeEvent<HTMLInputElement>
-      | React.ChangeEvent<HTMLSelectElement>
-      | React.ChangeEvent<HTMLTextAreaElement>
-  ) {
-    const { name, value } = e.target;
-    setForm((prev) => ({ ...prev, [name]: value }));
-  }
-
-  function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!form.client || !form.date) {
-      alert("Client name and date are required.");
-      return;
-    }
-
-    const newEvent: EventItem = {
-      id: Date.now(),
-      ...form,
-    };
-
-    setEvents((prev) => [newEvent, ...prev]);
-    setForm({
-      client: "",
-      date: "",
-      venue: "",
-      guests: "",
-      budget: "",
-      status: "Proposal sent",
-      notes: "",
-    });
-  }
-
-  function handleClear() {
-    if (!confirm("Clear all saved events?")) return;
-    setEvents([]);
+  function handleLogout() {
     if (typeof window !== "undefined") {
-      window.localStorage.removeItem(STORAGE_KEY);
+      window.localStorage.removeItem(USER_KEY);
+      window.location.href = "/login";
     }
   }
 
-  function statusTagClass(status: string) {
-    if (status === "Confirmed") return "eventura-tag eventura-tag-green";
-    if (status === "Pending advance") return "eventura-tag eventura-tag-amber";
-    return "eventura-tag eventura-tag-blue";
+  function handleQuickUpdate(e: React.FormEvent) {
+    e.preventDefault();
+    alert("Dashboard KPIs updated (local only).");
   }
+
+  if (!user) return null;
+  const isCEO = user.role === "CEO";
 
   return (
     <main className="eventura-page">
@@ -101,200 +50,173 @@ export default function EventsPage() {
         {/* Header */}
         <header className="eventura-header">
           <div>
-            <h1 className="eventura-title">Events – Eventura</h1>
+            <h1 className="eventura-title">Eventura – CEO Dashboard</h1>
             <p className="eventura-subtitle">
-              Add new events, track status, and see your full event pipeline.
+              {user.name} ({user.role}) · Events that speak your style
             </p>
+          </div>
+          <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+            <div className="eventura-pill">
+              Cofounders: Hardik · Shubh · Dixit
+            </div>
+            <button
+              className="eventura-button-secondary"
+              style={{ paddingInline: "0.8rem" }}
+              onClick={handleLogout}
+            >
+              Logout
+            </button>
           </div>
         </header>
 
         {/* Nav */}
         <nav className="eventura-nav">
-          <Link href="/" className="eventura-nav-link">
-            Dashboard
-          </Link>
           <Link
-            href="/events"
+            href="/"
             className="eventura-nav-link eventura-nav-link-active"
           >
+            Dashboard
+          </Link>
+          <Link href="/events" className="eventura-nav-link">
             Events
           </Link>
-          <Link href="/finance" className="eventura-nav-link">
-            Finance
+          <Link href="/leads" className="eventura-nav-link">
+            Leads
           </Link>
+          {isCEO && (
+            <Link href="/finance" className="eventura-nav-link">
+              Finance
+            </Link>
+          )}
         </nav>
 
-        {/* Layout: form + list */}
-        <section className="eventura-columns">
-          {/* Form panel */}
-          <div>
-            <h2 className="eventura-section-title">Add new event</h2>
-            <form className="eventura-form" onSubmit={handleSubmit}>
-              <div className="eventura-form-grid">
-                <div className="eventura-field">
-                  <label className="eventura-label" htmlFor="client">
-                    Client / Event name
-                  </label>
-                  <input
-                    id="client"
-                    name="client"
-                    className="eventura-input"
-                    value={form.client}
-                    onChange={handleChange}
-                    placeholder="e.g. Patel Wedding Sangeet"
-                  />
-                </div>
-
-                <div className="eventura-field">
-                  <label className="eventura-label" htmlFor="date">
-                    Date
-                  </label>
-                  <input
-                    id="date"
-                    name="date"
-                    type="date"
-                    className="eventura-input"
-                    value={form.date}
-                    onChange={handleChange}
-                  />
-                </div>
-
-                <div className="eventura-field">
-                  <label className="eventura-label" htmlFor="venue">
-                    Venue
-                  </label>
-                  <input
-                    id="venue"
-                    name="venue"
-                    className="eventura-input"
-                    value={form.venue}
-                    onChange={handleChange}
-                    placeholder="Farm / hotel / indoor"
-                  />
-                </div>
-
-                <div className="eventura-field">
-                  <label className="eventura-label" htmlFor="guests">
-                    Guests
-                  </label>
-                  <input
-                    id="guests"
-                    name="guests"
-                    className="eventura-input"
-                    value={form.guests}
-                    onChange={handleChange}
-                    placeholder="e.g. 300"
-                  />
-                </div>
-
-                <div className="eventura-field">
-                  <label className="eventura-label" htmlFor="budget">
-                    Budget (₹)
-                  </label>
-                  <input
-                    id="budget"
-                    name="budget"
-                    className="eventura-input"
-                    value={form.budget}
-                    onChange={handleChange}
-                    placeholder="e.g. 18,00,000"
-                  />
-                </div>
-
-                <div className="eventura-field">
-                  <label className="eventura-label" htmlFor="status">
-                    Status
-                  </label>
-                  <select
-                    id="status"
-                    name="status"
-                    className="eventura-select"
-                    value={form.status}
-                    onChange={handleChange}
-                  >
-                    <option>Proposal sent</option>
-                    <option>Pending advance</option>
-                    <option>Confirmed</option>
-                    <option>Completed</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="eventura-field" style={{ marginTop: "0.75rem" }}>
-                <label className="eventura-label" htmlFor="notes">
-                  Notes
-                </label>
-                <textarea
-                  id="notes"
-                  name="notes"
-                  className="eventura-textarea"
-                  value={form.notes}
-                  onChange={handleChange}
-                  placeholder="Special requirements, vendor notes, styling ideas…"
-                />
-              </div>
-
-              <div className="eventura-actions">
-                <button type="submit" className="eventura-button">
-                  Save event
-                </button>
-                <button
-                  type="button"
-                  className="eventura-button-secondary"
-                  onClick={handleClear}
-                >
-                  Clear all events
-                </button>
-              </div>
-            </form>
+        {/* KPI cards */}
+        <section className="eventura-grid">
+          <div className="eventura-card">
+            <p className="eventura-card-label">Events this month</p>
+            <p className="eventura-card-value">{eventsMonth}</p>
+            <p className="eventura-card-note">Manual KPI</p>
           </div>
 
-          {/* List panel */}
+          <div className="eventura-card">
+            <p className="eventura-card-label">Expected Revenue</p>
+            <p className="eventura-card-value">₹{expectedRevenue}</p>
+            <p className="eventura-card-note">Target: ₹25 Lakh</p>
+          </div>
+
+          <div className="eventura-card">
+            <p className="eventura-card-label">Leads in pipeline</p>
+            <p className="eventura-card-value">{leadsPipeline}</p>
+            <p className="eventura-card-note">From Leads module</p>
+          </div>
+        </section>
+
+        {/* Quick KPI edit */}
+        <section className="eventura-form" style={{ marginBottom: "2rem" }}>
+          <h2 className="eventura-section-title">Quick update – KPIs</h2>
+          <form className="eventura-form-grid" onSubmit={handleQuickUpdate}>
+            <div className="eventura-field">
+              <label className="eventura-label" htmlFor="eventsMonth">
+                Events this month
+              </label>
+              <input
+                id="eventsMonth"
+                className="eventura-input"
+                value={eventsMonth}
+                onChange={(e) => setEventsMonth(e.target.value)}
+              />
+            </div>
+
+            <div className="eventura-field">
+              <label className="eventura-label" htmlFor="expectedRevenue">
+                Expected revenue (₹)
+              </label>
+              <input
+                id="expectedRevenue"
+                className="eventura-input"
+                value={expectedRevenue}
+                onChange={(e) => setExpectedRevenue(e.target.value)}
+              />
+            </div>
+
+            <div className="eventura-field">
+              <label className="eventura-label" htmlFor="leadsPipeline">
+                Leads in pipeline
+              </label>
+              <input
+                id="leadsPipeline"
+                className="eventura-input"
+                value={leadsPipeline}
+                onChange={(e) => setLeadsPipeline(e.target.value)}
+              />
+            </div>
+
+            <div className="eventura-actions">
+              <button type="submit" className="eventura-button">
+                Save dashboard KPIs
+              </button>
+            </div>
+          </form>
+        </section>
+
+        {/* Bottom panels (static for now) */}
+        <section className="eventura-columns">
           <div className="eventura-panel">
-            <h2 className="eventura-panel-title">Event pipeline</h2>
-            {events.length === 0 ? (
-              <p style={{ fontSize: "0.8rem", color: "#9ca3af" }}>
-                No events saved yet. Add an event using the form on the left.
-              </p>
-            ) : (
-              <ul className="eventura-list">
-                {events.map((ev) => (
-                  <li key={ev.id} className="eventura-list-item">
-                    <div>
-                      <p className="eventura-list-title">{ev.client}</p>
-                      <p className="eventura-list-sub">
-                        {ev.date} · {ev.venue || "Venue TBC"} ·{" "}
-                        {ev.guests ? `${ev.guests} guests` : "Guest count TBC"}
-                      </p>
-                      {ev.budget && (
-                        <p
-                          className="eventura-list-sub"
-                          style={{ marginTop: "0.1rem" }}
-                        >
-                          Budget: ₹{ev.budget}
-                        </p>
-                      )}
-                      {ev.notes && (
-                        <p
-                          className="eventura-list-sub"
-                          style={{ marginTop: "0.15rem" }}
-                        >
-                          Notes: {ev.notes}
-                        </p>
-                      )}
-                    </div>
-                    <span className={statusTagClass(ev.status)}>
-                      {ev.status}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            )}
+            <h2 className="eventura-panel-title">
+              Upcoming events (manual snapshot)
+            </h2>
+            <ul className="eventura-list">
+              <li className="eventura-list-item">
+                <div>
+                  <p className="eventura-list-title">Patel Wedding Sangeet</p>
+                  <p className="eventura-list-sub">
+                    14 Dec · Laxmi Farm, Surat · 450 guests
+                  </p>
+                </div>
+                <span className="eventura-tag eventura-tag-green">
+                  Confirmed
+                </span>
+              </li>
+              <li className="eventura-list-item">
+                <div>
+                  <p className="eventura-list-title">
+                    Corporate Gala – XYZ Textiles
+                  </p>
+                  <p className="eventura-list-sub">
+                    16 Dec · Taj Gateway · 220 guests
+                  </p>
+                </div>
+                <span className="eventura-tag eventura-tag-amber">
+                  Pending advance
+                </span>
+              </li>
+              <li className="eventura-list-item">
+                <div>
+                  <p className="eventura-list-title">
+                    Engagement – Mehta Family
+                  </p>
+                  <p className="eventura-list-sub">
+                    18 Dec · Indoor · 150 guests
+                  </p>
+                </div>
+                <span className="eventura-tag eventura-tag-blue">
+                  Proposal sent
+                </span>
+              </li>
+            </ul>
+          </div>
+
+          <div className="eventura-panel">
+            <h2 className="eventura-panel-title">Finance snapshot</h2>
+            <p className="eventura-list-sub">
+              Open Finance module for full income/expense breakdown.
+            </p>
           </div>
         </section>
 
         <footer className="eventura-footer">
-          Eventura · Events module · © {new Date().getFullYear()}
+          Eventura · Royal Event & Wedding Design Studio · Surat · ©{" "}
+          {new Date().getFullYear()}
         </footer>
       </div>
     </main>

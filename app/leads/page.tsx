@@ -6,34 +6,31 @@ import Link from "next/link";
 type Role = "CEO" | "Staff";
 type User = { name: string; role: Role };
 
-type EventItem = {
+type Lead = {
   id: number;
-  client: string;
-  date: string;
-  venue: string;
-  guests: string;
+  name: string;
+  source: string;
   budget: string;
+  contact: string;
   status: string;
   notes: string;
 };
 
 const USER_KEY = "eventura-user";
-const EVENTS_KEY = "eventura-events";
+const LEADS_KEY = "eventura-leads";
 
-export default function EventsPage() {
+export default function LeadsPage() {
   const [user, setUser] = useState<User | null>(null);
-  const [events, setEvents] = useState<EventItem[]>([]);
-  const [form, setForm] = useState<Omit<EventItem, "id">>({
-    client: "",
-    date: "",
-    venue: "",
-    guests: "",
+  const [leads, setLeads] = useState<Lead[]>([]);
+  const [form, setForm] = useState<Omit<Lead, "id">>({
+    name: "",
+    source: "",
     budget: "",
-    status: "Proposal sent",
+    contact: "",
+    status: "New",
     notes: "",
   });
 
-  // auth
   useEffect(() => {
     if (typeof window === "undefined") return;
     const raw = window.localStorage.getItem(USER_KEY);
@@ -49,24 +46,22 @@ export default function EventsPage() {
     }
   }, []);
 
-  // load events
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const raw = window.localStorage.getItem(EVENTS_KEY);
+    const raw = window.localStorage.getItem(LEADS_KEY);
     if (raw) {
       try {
-        setEvents(JSON.parse(raw));
+        setLeads(JSON.parse(raw));
       } catch (e) {
-        console.error("Failed to parse events", e);
+        console.error("Failed to parse leads", e);
       }
     }
   }, []);
 
-  // save events
   useEffect(() => {
     if (typeof window === "undefined") return;
-    window.localStorage.setItem(EVENTS_KEY, JSON.stringify(events));
-  }, [events]);
+    window.localStorage.setItem(LEADS_KEY, JSON.stringify(leads));
+  }, [leads]);
 
   function handleChange(
     e:
@@ -80,40 +75,32 @@ export default function EventsPage() {
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!form.client || !form.date) {
-      alert("Client name and date are required.");
+    if (!form.name) {
+      alert("Lead name is required.");
       return;
     }
 
-    const newEvent: EventItem = {
+    const newLead: Lead = {
       id: Date.now(),
       ...form,
     };
-
-    setEvents((prev) => [newEvent, ...prev]);
+    setLeads((prev) => [newLead, ...prev]);
     setForm({
-      client: "",
-      date: "",
-      venue: "",
-      guests: "",
+      name: "",
+      source: "",
       budget: "",
-      status: "Proposal sent",
+      contact: "",
+      status: "New",
       notes: "",
     });
   }
 
   function handleClear() {
-    if (!confirm("Clear all saved events?")) return;
-    setEvents([]);
+    if (!confirm("Clear all leads?")) return;
+    setLeads([]);
     if (typeof window !== "undefined") {
-      window.localStorage.removeItem(EVENTS_KEY);
+      window.localStorage.removeItem(LEADS_KEY);
     }
-  }
-
-  function statusTagClass(status: string) {
-    if (status === "Confirmed") return "eventura-tag eventura-tag-green";
-    if (status === "Pending advance") return "eventura-tag eventura-tag-amber";
-    return "eventura-tag eventura-tag-blue";
   }
 
   if (!user) return null;
@@ -124,9 +111,9 @@ export default function EventsPage() {
       <div className="eventura-shell">
         <header className="eventura-header">
           <div>
-            <h1 className="eventura-title">Events – Eventura</h1>
+            <h1 className="eventura-title">Leads – Eventura CRM</h1>
             <p className="eventura-subtitle">
-              Add new events, track status, and see your event pipeline.
+              Track leads from enquiry to converted client.
             </p>
           </div>
         </header>
@@ -135,13 +122,13 @@ export default function EventsPage() {
           <Link href="/" className="eventura-nav-link">
             Dashboard
           </Link>
-          <Link
-            href="/events"
-            className="eventura-nav-link eventura-nav-link-active"
-          >
+          <Link href="/events" className="eventura-nav-link">
             Events
           </Link>
-          <Link href="/leads" className="eventura-nav-link">
+          <Link
+            href="/leads"
+            className="eventura-nav-link eventura-nav-link-active"
+          >
             Leads
           </Link>
           {isCEO && (
@@ -153,62 +140,34 @@ export default function EventsPage() {
 
         <section className="eventura-columns">
           <div>
-            <h2 className="eventura-section-title">Add new event</h2>
+            <h2 className="eventura-section-title">Add new lead</h2>
             <form className="eventura-form" onSubmit={handleSubmit}>
               <div className="eventura-form-grid">
                 <div className="eventura-field">
-                  <label className="eventura-label" htmlFor="client">
-                    Client / Event name
+                  <label className="eventura-label" htmlFor="name">
+                    Lead name / contact
                   </label>
                   <input
-                    id="client"
-                    name="client"
+                    id="name"
+                    name="name"
                     className="eventura-input"
-                    value={form.client}
+                    value={form.name}
                     onChange={handleChange}
-                    placeholder="e.g. Patel Wedding Sangeet"
+                    placeholder="e.g. Mehta Family / Rakesh Mehta"
                   />
                 </div>
 
                 <div className="eventura-field">
-                  <label className="eventura-label" htmlFor="date">
-                    Date
+                  <label className="eventura-label" htmlFor="source">
+                    Source
                   </label>
                   <input
-                    id="date"
-                    name="date"
-                    type="date"
+                    id="source"
+                    name="source"
                     className="eventura-input"
-                    value={form.date}
+                    value={form.source}
                     onChange={handleChange}
-                  />
-                </div>
-
-                <div className="eventura-field">
-                  <label className="eventura-label" htmlFor="venue">
-                    Venue
-                  </label>
-                  <input
-                    id="venue"
-                    name="venue"
-                    className="eventura-input"
-                    value={form.venue}
-                    onChange={handleChange}
-                    placeholder="Farm / hotel / indoor"
-                  />
-                </div>
-
-                <div className="eventura-field">
-                  <label className="eventura-label" htmlFor="guests">
-                    Guests
-                  </label>
-                  <input
-                    id="guests"
-                    name="guests"
-                    className="eventura-input"
-                    value={form.guests}
-                    onChange={handleChange}
-                    placeholder="e.g. 300"
+                    placeholder="Instagram / Vendor / Referral / Walk-in"
                   />
                 </div>
 
@@ -222,7 +181,21 @@ export default function EventsPage() {
                     className="eventura-input"
                     value={form.budget}
                     onChange={handleChange}
-                    placeholder="e.g. 18,00,000"
+                    placeholder="e.g. 20,00,000"
+                  />
+                </div>
+
+                <div className="eventura-field">
+                  <label className="eventura-label" htmlFor="contact">
+                    Contact details
+                  </label>
+                  <input
+                    id="contact"
+                    name="contact"
+                    className="eventura-input"
+                    value={form.contact}
+                    onChange={handleChange}
+                    placeholder="Phone / Email / City"
                   />
                 </div>
 
@@ -237,10 +210,10 @@ export default function EventsPage() {
                     value={form.status}
                     onChange={handleChange}
                   >
-                    <option>Proposal sent</option>
-                    <option>Pending advance</option>
-                    <option>Confirmed</option>
-                    <option>Completed</option>
+                    <option>New</option>
+                    <option>Follow-Up</option>
+                    <option>Converted</option>
+                    <option>Lost</option>
                   </select>
                 </div>
               </div>
@@ -255,60 +228,60 @@ export default function EventsPage() {
                   className="eventura-textarea"
                   value={form.notes}
                   onChange={handleChange}
-                  placeholder="Special requirements, vendor notes, styling ideas…"
+                  placeholder="Extra context about this lead…"
                 />
               </div>
 
               <div className="eventura-actions">
                 <button type="submit" className="eventura-button">
-                  Save event
+                  Save lead
                 </button>
                 <button
                   type="button"
                   className="eventura-button-secondary"
                   onClick={handleClear}
                 >
-                  Clear all events
+                  Clear all leads
                 </button>
               </div>
             </form>
           </div>
 
           <div className="eventura-panel">
-            <h2 className="eventura-panel-title">Event pipeline</h2>
-            {events.length === 0 ? (
+            <h2 className="eventura-panel-title">Lead pipeline</h2>
+            {leads.length === 0 ? (
               <p style={{ fontSize: "0.8rem", color: "#9ca3af" }}>
-                No events saved yet. Add an event using the form on the left.
+                No leads yet. Add using the form on the left.
               </p>
             ) : (
               <ul className="eventura-list">
-                {events.map((ev) => (
-                  <li key={ev.id} className="eventura-list-item">
+                {leads.map((lead) => (
+                  <li key={lead.id} className="eventura-list-item">
                     <div>
-                      <p className="eventura-list-title">{ev.client}</p>
+                      <p className="eventura-list-title">{lead.name}</p>
                       <p className="eventura-list-sub">
-                        {ev.date} · {ev.venue || "Venue TBC"} ·{" "}
-                        {ev.guests ? `${ev.guests} guests` : "Guest count TBC"}
+                        {lead.source || "Source N/A"} · Budget: ₹
+                        {lead.budget || "0"}
                       </p>
-                      {ev.budget && (
+                      {lead.contact && (
                         <p
                           className="eventura-list-sub"
                           style={{ marginTop: "0.1rem" }}
                         >
-                          Budget: ₹{ev.budget}
+                          Contact: {lead.contact}
                         </p>
                       )}
-                      {ev.notes && (
+                      {lead.notes && (
                         <p
                           className="eventura-list-sub"
                           style={{ marginTop: "0.15rem" }}
                         >
-                          Notes: {ev.notes}
+                          Notes: {lead.notes}
                         </p>
                       )}
                     </div>
-                    <span className={statusTagClass(ev.status)}>
-                      {ev.status}
+                    <span className="eventura-tag eventura-tag-blue">
+                      {lead.status}
                     </span>
                   </li>
                 ))}
@@ -318,7 +291,7 @@ export default function EventsPage() {
         </section>
 
         <footer className="eventura-footer">
-          Eventura · Events module · © {new Date().getFullYear()}
+          Eventura · Leads CRM · © {new Date().getFullYear()}
         </footer>
       </div>
     </main>
