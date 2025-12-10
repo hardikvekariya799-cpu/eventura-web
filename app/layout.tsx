@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Eventura – CEO Console",
-  description: "Internal operations console for Eventura",
+  title: "Eventura OS – Internal Console",
+  description: "Eventura OS for CEO, Core Team and Staff",
 };
 
 export default function RootLayout({
