@@ -5,11 +5,28 @@ import Link from "next/link";
 
 type Role = "CEO" | "Staff";
 type User = { name: string; role: Role; city: string };
+type EventItem = {
+  id: number;
+  client: string;
+  eventName: string;
+  eventType: string;
+  city: string;
+  date: string; // YYYY-MM-DD
+  budget: string;
+  status: string;
+};
 
 const USER_KEY = "eventura-user";
+const EVENTS_KEY = "eventura-events";
 
 export default function CalendarPage() {
   const [user, setUser] = useState<User | null>(null);
+  const [events, setEvents] = useState<EventItem[]>([]);
+  const [currentMonth, setCurrentMonth] = useState(() => {
+    const d = new Date();
+    return new Date(d.getFullYear(), d.getMonth(), 1);
+  });
+  const [selectedDate, setSelectedDate] = useState<string | null>(null);
 
   // AUTH
   useEffect(() => {
@@ -28,14 +45,48 @@ export default function CalendarPage() {
     }
   }, []);
 
+  // Load events
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const raw = window.localStorage.getItem(EVENTS_KEY);
+    if (raw) {
+      try {
+        setEvents(JSON.parse(raw));
+      } catch (e) {
+        console.error("Failed to parse events", e);
+      }
+    }
+  }, []);
+
   if (!user) return null;
 
-  const today = new Date();
-  const todayStr = today.toLocaleDateString("en-IN", {
-    day: "2-digit",
-    month: "short",
+  const year = currentMonth.getFullYear();
+  const monthIndex = currentMonth.getMonth(); // 0-11
+  const monthLabel = currentMonth.toLocaleDateString("en-IN", {
+    month: "long",
     year: "numeric",
   });
+
+  const daysInMonth = new Date(year, monthIndex + 1, 0).getDate();
+
+  function getDateString(day: number): string {
+    const mm = String(monthIndex + 1).padStart(2, "0");
+    const dd = String(day).padStart(2, "0");
+    return `${year}-${mm}-${dd}`;
+  }
+
+  function eventsForDate(dateStr: string) {
+    return events.filter((ev) => ev.date === dateStr);
+  }
+
+  function changeMonth(offset: number) {
+    setCurrentMonth(
+      (prev) => new Date(prev.getFullYear(), prev.getMonth() + offset, 1)
+    );
+    setSelectedDate(null);
+  }
+
+  const selectedEvents = selectedDate ? eventsForDate(selectedDate) : [];
 
   return (
     <main className="eventura-os">
@@ -47,90 +98,148 @@ export default function CalendarPage() {
         <TopbarCore user={user} />
 
         <div className="eventura-content">
-          <h1 className="eventura-title">Calendar – Eventura OS</h1>
-          <p className="eventura-subtitle">
-            View upcoming events, site visits and vendor meetings by date. This
-            is a simple first version – we can later sync it with your Events
-            data.
-          </p>
+          <h1 className="eventura-title">Calendar</h1>
 
-          <section className="eventura-middle">
-            {/* Left: "Today & this week" */}
+          <section className="eventura-columns">
+            {/* Month grid */}
             <div className="eventura-panel">
-              <h2 className="eventura-panel-title">Today</h2>
-              <p className="eventura-small-text">
-                Date: <b>{todayStr}</b>
-              </p>
-              <ul className="eventura-list" style={{ marginTop: "0.75rem" }}>
-                <li className="eventura-list-item">
-                  <div>
-                    <div className="eventura-list-title">
-                      No events added to Calendar yet
-                    </div>
-                    <div className="eventura-list-sub">
-                      Use the Events module to manage event details.
-                    </div>
-                  </div>
-                  <span className="eventura-tag eventura-tag-blue">
-                    Coming soon
-                  </span>
-                </li>
-              </ul>
-            </div>
-
-            {/* Right: Simple month grid placeholder */}
-            <div className="eventura-panel">
-              <h2 className="eventura-panel-title">Monthly calendar (basic)</h2>
-              <p className="eventura-small-text">
-                This is a placeholder grid so the Calendar page works. Later we
-                can connect it to real events and allow clicking dates.
-              </p>
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  marginBottom: "0.75rem",
+                }}
+              >
+                <button
+                  className="eventura-button-secondary"
+                  type="button"
+                  onClick={() => changeMonth(-1)}
+                >
+                  ← Prev
+                </button>
+                <div style={{ fontSize: "0.9rem", fontWeight: 600 }}>
+                  {monthLabel}
+                </div>
+                <button
+                  className="eventura-button-secondary"
+                  type="button"
+                  onClick={() => changeMonth(1)}
+                >
+                  Next →
+                </button>
+              </div>
 
               <div
                 style={{
-                  marginTop: "0.8rem",
                   display: "grid",
-                  gridTemplateColumns: "repeat(7, minmax(0, 1fr))",
-                  gap: "0.35rem",
+                  gridTemplateColumns: "repeat(7, 1fr)",
+                  gap: "6px",
                   fontSize: "0.75rem",
                 }}
               >
-                {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map(
-                  (d) => (
-                    <div
-                      key={d}
-                      style={{
-                        textAlign: "center",
-                        color: "#9ca3af",
-                        marginBottom: "0.25rem",
-                      }}
-                    >
-                      {d}
-                    </div>
-                  )
-                )}
-
-                {Array.from({ length: 35 }).map((_, idx) => (
+                {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => (
                   <div
-                    key={idx}
+                    key={d}
                     style={{
-                      height: "42px",
-                      borderRadius: "0.65rem",
-                      border: "1px solid rgba(31,41,55,0.9)",
-                      background:
-                        idx === 0
-                          ? "radial-gradient(circle at top, #4c1d95, #020617)"
-                          : "radial-gradient(circle at top, #020617, #020617)",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      opacity: idx < 31 ? 1 : 0.35,
+                      textAlign: "center",
+                      color: "#9ca3af",
+                      marginBottom: "0.25rem",
                     }}
                   >
-                    {idx + 1 <= 31 ? idx + 1 : ""}
+                    {d}
                   </div>
                 ))}
+
+                {Array.from({ length: daysInMonth }).map((_, i) => {
+                  const day = i + 1;
+                  const dateStr = getDateString(day);
+                  const count = eventsForDate(dateStr).length;
+                  const isSelected = selectedDate === dateStr;
+
+                  return (
+                    <button
+                      key={dateStr}
+                      type="button"
+                      onClick={() => setSelectedDate(dateStr)}
+                      style={{
+                        height: "55px",
+                        borderRadius: "10px",
+                        border: isSelected
+                          ? "1px solid #a855f7"
+                          : "1px solid #1f2937",
+                        background: isSelected
+                          ? "radial-gradient(circle at top, #a855f7, #4c1d95)"
+                          : "#020617",
+                        color: "#e5e7eb",
+                        display: "flex",
+                        flexDirection: "column",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        gap: "3px",
+                      }}
+                    >
+                      <span>{day}</span>
+                      {count > 0 && (
+                        <span style={{ fontSize: "0.65rem", color: "#facc15" }}>
+                          {count} evt
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
               </div>
+            </div>
+
+            {/* Right side: selected date events */}
+            <div className="eventura-panel">
+              <h2 className="eventura-panel-title">
+                {selectedDate ? `Events on ${selectedDate}` : "Select a date"}
+              </h2>
+
+              {!selectedDate && (
+                <p className="eventura-small-text">
+                  Click on a date in the calendar to see its events.
+                </p>
+              )}
+
+              {selectedDate && (
+                <>
+                  <Link
+                    href={`/events?date=${selectedDate}`}
+                    className="eventura-button"
+                  >
+                    + Add event on this date
+                  </Link>
+
+                  {selectedEvents.length === 0 ? (
+                    <p
+                      className="eventura-small-text"
+                      style={{ marginTop: "0.75rem" }}
+                    >
+                      No events yet on this date.
+                    </p>
+                  ) : (
+                    <ul className="eventura-list" style={{ marginTop: "0.9rem" }}>
+                      {selectedEvents.map((ev) => (
+                        <li key={ev.id} className="eventura-list-item">
+                          <div>
+                            <div className="eventura-list-title">
+                              {ev.client} – {ev.eventName || ev.eventType}
+                            </div>
+                            <div className="eventura-list-sub">
+                              {ev.city} · Budget: ₹{ev.budget}
+                            </div>
+                          </div>
+                          <span className="eventura-tag eventura-tag-blue">
+                            {ev.status}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </>
+              )}
             </div>
           </section>
 
@@ -143,7 +252,7 @@ export default function CalendarPage() {
   );
 }
 
-/* Reuse sidebar/topbar helpers like other pages */
+/* Shared layout helpers */
 
 function SidebarCore({ user, active }: { user: User; active: string }) {
   const isCEO = user.role === "CEO";
@@ -153,9 +262,6 @@ function SidebarCore({ user, active }: { user: User; active: string }) {
         <div className="eventura-logo-circle">E</div>
         <div className="eventura-logo-text">
           <div className="eventura-logo-name">Eventura OS</div>
-          <div className="eventura-logo-tagline">
-            Events that speak your style
-          </div>
         </div>
       </div>
       <nav className="eventura-sidebar-nav">
@@ -197,39 +303,9 @@ function SidebarCore({ user, active }: { user: User; active: string }) {
             active={active === "finance"}
           />
         )}
-        <SidebarLink
-          href="/hr"
-          label="HR & Team"
-          icon="🧑‍💼"
-          active={active === "hr"}
-        />
-        <SidebarLink
-          href="/inventory"
-          label="Inventory & Assets"
-          icon="📦"
-          active={active === "inventory"}
-        />
-        {isCEO && (
-          <SidebarLink
-            href="/reports"
-            label="Reports & Analytics"
-            icon="📈"
-            active={active === "reports"}
-          />
-        )}
-        {isCEO && (
-          <SidebarLink
-            href="/settings"
-            label="Settings & Access"
-            icon="⚙️"
-            active={active === "settings"}
-          />
-        )}
       </nav>
       <div className="eventura-sidebar-footer">
-        <div className="eventura-sidebar-role">
-          Role: {user.role === "CEO" ? "CEO / Super Admin" : "Staff"}
-        </div>
+        <div className="eventura-sidebar-role">Role: {user.role}</div>
         <div className="eventura-sidebar-city">City: {user.city}</div>
       </div>
     </>
@@ -245,14 +321,12 @@ function TopbarCore({ user }: { user: User }) {
       <div className="eventura-topbar-center">
         <input
           className="eventura-search"
-          placeholder="Search events, clients, vendors..."
+          placeholder="Search (coming soon)"
+          disabled
         />
       </div>
       <div className="eventura-topbar-right">
-        <button className="eventura-topbar-icon" title="Notifications">
-          🔔
-        </button>
-        <div className="eventura-user-avatar" title={user.name}>
+        <div className="eventura-user-avatar">
           {user.name.charAt(0).toUpperCase()}
         </div>
       </div>

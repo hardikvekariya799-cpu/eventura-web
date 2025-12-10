@@ -26,7 +26,14 @@ const STAGES: StageKey[] = [
 ];
 
 type StoredEvent = {
-  status?: string;
+  id: number;
+  client: string;
+  eventName: string;
+  eventType: string;
+  city: string;
+  date: string; // YYYY-MM-DD
+  budget: string;
+  status: string;
 };
 
 type FinanceEntry = {
@@ -59,6 +66,12 @@ export default function DashboardPage() {
     Completed: 0,
   });
 
+  const [upcomingEvents, setUpcomingEvents] = useState<StoredEvent[]>([]);
+
+  // search
+  const [searchTerm, setSearchTerm] = useState("");
+  const [searchResults, setSearchResults] = useState<StoredEvent[]>([]);
+
   // === AUTH + LOAD DATA ===
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -80,36 +93,60 @@ export default function DashboardPage() {
   function loadDashboardData() {
     if (typeof window === "undefined") return;
 
-    // Events
+    // ---- EVENTS ----
     const eventsRaw = window.localStorage.getItem(EVENTS_KEY);
+    let list: StoredEvent[] = [];
     if (eventsRaw) {
       try {
-        const list: StoredEvent[] = JSON.parse(eventsRaw);
-        setEventsThisMonth(list.length);
-
-        const counts: Record<StageKey, number> = {
-          "New Leads": 0,
-          "Proposal Sent": 0,
-          Negotiation: 0,
-          Confirmed: 0,
-          Completed: 0,
-        };
-
-        for (const ev of list) {
-          const status = (ev.status || "New").trim();
-          if (status === "New") counts["New Leads"] += 1;
-          else if (status === "Proposal Sent") counts["Proposal Sent"] += 1;
-          else if (status === "Negotiation") counts["Negotiation"] += 1;
-          else if (status === "Confirmed") counts["Confirmed"] += 1;
-          else if (status === "Completed") counts["Completed"] += 1;
-        }
-        setPipeCounts(counts);
+        list = JSON.parse(eventsRaw);
       } catch (e) {
         console.error("Failed to parse events", e);
       }
     }
 
-    // Finance
+    // events this month
+    const now = new Date();
+    const currentMonth = now.getMonth();
+    const currentYear = now.getFullYear();
+    const eventsThisMonthCount = list.filter((ev) => {
+      if (!ev.date) return false;
+      const d = new Date(ev.date + "T00:00:00");
+      return d.getMonth() === currentMonth && d.getFullYear() === currentYear;
+    }).length;
+    setEventsThisMonth(eventsThisMonthCount);
+
+    // pipeline
+    const counts: Record<StageKey, number> = {
+      "New Leads": 0,
+      "Proposal Sent": 0,
+      Negotiation: 0,
+      Confirmed: 0,
+      Completed: 0,
+    };
+
+    for (const ev of list) {
+      const status = (ev.status || "New").trim();
+      if (status === "New") counts["New Leads"] += 1;
+      else if (status === "Proposal Sent") counts["Proposal Sent"] += 1;
+      else if (status === "Negotiation") counts["Negotiation"] += 1;
+      else if (status === "Confirmed") counts["Confirmed"] += 1;
+      else if (status === "Completed") counts["Completed"] += 1;
+    }
+    setPipeCounts(counts);
+
+    // upcoming 7 events
+    const today = new Date();
+    const upcoming = list
+      .filter((ev) => {
+        if (!ev.date) return false;
+        const d = new Date(ev.date + "T00:00:00");
+        return d >= today;
+      })
+      .sort((a, b) => (a.date > b.date ? 1 : -1))
+      .slice(0, 7);
+    setUpcomingEvents(upcoming);
+
+    // ---- FINANCE ----
     const financeRaw = window.localStorage.getItem(FINANCE_KEY);
     if (financeRaw) {
       try {
@@ -136,6 +173,49 @@ export default function DashboardPage() {
     if (typeof window !== "undefined") {
       window.localStorage.removeItem(USER_KEY);
       window.location.href = "/login";
+    }
+  }
+
+  // === SEARCH LOGIC ===
+  function handleSearch() {
+    if (typeof window === "undefined") return;
+    const q = searchTerm.trim().toLowerCase();
+    if (!q) {
+      setSearchResults([]);
+      return;
+    }
+    const eventsRaw = window.localStorage.getItem(EVENTS_KEY);
+    if (!eventsRaw) {
+      setSearchResults([]);
+      return;
+    }
+    try {
+      const list: StoredEvent[] = JSON.parse(eventsRaw);
+      const matches = list.filter((ev) => {
+        const text = [
+          ev.client,
+          ev.eventName,
+          ev.eventType,
+          ev.city,
+          ev.status,
+          ev.date,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        return text.includes(q);
+      });
+      setSearchResults(matches);
+    } catch (e) {
+      console.error("search failed", e);
+      setSearchResults([]);
+    }
+  }
+
+  function handleSearchKey(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      handleSearch();
     }
   }
 
@@ -205,7 +285,18 @@ export default function DashboardPage() {
             <input
               className="eventura-search"
               placeholder="Search events, clients, vendors..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              onKeyDown={handleSearchKey}
             />
+            <button
+              className="eventura-topbar-icon"
+              style={{ marginLeft: "0.4rem" }}
+              onClick={handleSearch}
+              title="Search"
+            >
+              🔍
+            </button>
           </div>
 
           <div className="eventura-topbar-right">
@@ -302,59 +393,38 @@ export default function DashboardPage() {
               </div>
             </div>
 
-            {/* Upcoming (still sample) */}
+            {/* Upcoming events - now real data */}
             <div className="eventura-panel">
               <h2 className="eventura-panel-title">
-                Upcoming 7 events (sample view)
+                Upcoming events (next dates)
               </h2>
-              <ul className="eventura-list">
-                <li className="eventura-list-item">
-                  <div>
-                    <div className="eventura-list-title">
-                      Patel Wedding Sangeet
-                    </div>
-                    <div className="eventura-list-sub">
-                      14 Dec · Laxmi Farm, Surat · 450 guests
-                    </div>
-                  </div>
-                  <span className="eventura-tag eventura-tag-green">
-                    Planning
-                  </span>
-                </li>
-                <li className="eventura-list-item">
-                  <div>
-                    <div className="eventura-list-title">
-                      Corporate Gala – XYZ Textiles
-                    </div>
-                    <div className="eventura-list-sub">
-                      16 Dec · Taj Gateway, Surat · 220 guests
-                    </div>
-                  </div>
-                  <span className="eventura-tag eventura-tag-amber">
-                    In Execution
-                  </span>
-                </li>
-                <li className="eventura-list-item">
-                  <div>
-                    <div className="eventura-list-title">
-                      Engagement – Mehta Family
-                    </div>
-                    <div className="eventura-list-sub">
-                      18 Dec · Indoor · Rajkot · 150 guests
-                    </div>
-                  </div>
-                  <span className="eventura-tag eventura-tag-blue">
-                    Final Billing
-                  </span>
-                </li>
-              </ul>
-              <div className="eventura-small-text">
-                Later we can wire this to real Calendar data.
-              </div>
+              {upcomingEvents.length === 0 ? (
+                <p className="eventura-small-text">
+                  No upcoming events found. Add events from the Events module.
+                </p>
+              ) : (
+                <ul className="eventura-list">
+                  {upcomingEvents.map((ev) => (
+                    <li key={ev.id} className="eventura-list-item">
+                      <div>
+                        <div className="eventura-list-title">
+                          {ev.client} – {ev.eventName || ev.eventType}
+                        </div>
+                        <div className="eventura-list-sub">
+                          {ev.date} · {ev.city} · Budget: ₹{ev.budget}
+                        </div>
+                      </div>
+                      <span className="eventura-tag eventura-tag-blue">
+                        {ev.status || "Planned"}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
           </section>
 
-          {/* Quick actions — NOW USING LINKS (WILL ALWAYS WORK) */}
+          {/* Quick actions */}
           <section className="eventura-quick-actions">
             <Link href="/events" className="eventura-button">
               + New Event
@@ -382,6 +452,32 @@ export default function DashboardPage() {
               </>
             )}
           </section>
+
+          {/* Search results area */}
+          {searchResults.length > 0 && (
+            <section style={{ marginTop: "1.5rem" }}>
+              <h2 className="eventura-panel-title">Search results (events)</h2>
+              <div className="eventura-panel">
+                <ul className="eventura-list">
+                  {searchResults.map((ev) => (
+                    <li key={ev.id} className="eventura-list-item">
+                      <div>
+                        <div className="eventura-list-title">
+                          {ev.client} – {ev.eventName || ev.eventType}
+                        </div>
+                        <div className="eventura-list-sub">
+                          {ev.date} · {ev.city} · Budget: ₹{ev.budget}
+                        </div>
+                      </div>
+                      <span className="eventura-tag eventura-tag-green">
+                        {ev.status}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </section>
+          )}
         </div>
       </div>
     </main>

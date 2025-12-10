@@ -9,17 +9,12 @@ type User = { name: string; role: Role; city: string };
 type EventItem = {
   id: number;
   client: string;
-  type: string;
-  date: string;
+  eventName: string;
+  eventType: string;
   city: string;
-  venue: string;
-  guests: string;
+  date: string; // YYYY-MM-DD
   budget: string;
-  revenue: string;
-  margin: string;
-  status: string;
-  owner: string;
-  notes: string;
+  status: string; // New / Proposal Sent / Negotiation / Confirmed / Completed
 };
 
 const USER_KEY = "eventura-user";
@@ -30,22 +25,18 @@ export default function EventsPage() {
   const [events, setEvents] = useState<EventItem[]>([]);
   const [form, setForm] = useState<Omit<EventItem, "id">>({
     client: "",
-    type: "Wedding",
+    eventName: "",
+    eventType: "",
+    city: "",
     date: "",
-    city: "Surat",
-    venue: "",
-    guests: "",
     budget: "",
-    revenue: "",
-    margin: "",
     status: "New",
-    owner: "",
-    notes: "",
   });
 
-  // auth
+  // AUTH
   useEffect(() => {
     if (typeof window === "undefined") return;
+
     const raw = window.localStorage.getItem(USER_KEY);
     if (!raw) {
       window.location.href = "/login";
@@ -54,14 +45,13 @@ export default function EventsPage() {
     try {
       const u: User = JSON.parse(raw);
       setUser(u);
-      setForm((prev) => ({ ...prev, owner: u.name }));
     } catch {
       window.localStorage.removeItem(USER_KEY);
       window.location.href = "/login";
     }
   }, []);
 
-  // load events
+  // Load events
   useEffect(() => {
     if (typeof window === "undefined") return;
     const raw = window.localStorage.getItem(EVENTS_KEY);
@@ -72,52 +62,59 @@ export default function EventsPage() {
         console.error("Failed to parse events", e);
       }
     }
+
+    // pre-fill date from ?date=YYYY-MM-DD (when coming from calendar)
+    const params = new URLSearchParams(window.location.search);
+    const dateParam = params.get("date");
+    if (dateParam) {
+      setForm((prev) => ({ ...prev, date: dateParam }));
+    }
   }, []);
 
-  // save events
+  // Save events automatically
   useEffect(() => {
     if (typeof window === "undefined") return;
     window.localStorage.setItem(EVENTS_KEY, JSON.stringify(events));
   }, [events]);
 
   function handleChange(
-    e:
-      | React.ChangeEvent<HTMLInputElement>
-      | React.ChangeEvent<HTMLSelectElement>
-      | React.ChangeEvent<HTMLTextAreaElement>
+    e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>
   ) {
     const { name, value } = e.target;
     setForm((prev) => ({ ...prev, [name]: value }));
   }
 
   function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
+    e.preventDefault(); // important: stops page from refreshing & deleting input
+
     if (!form.client || !form.date) {
-      alert("Client name and event date are required.");
+      alert("Client name and date are required.");
       return;
     }
+
     const newEvent: EventItem = {
       id: Date.now(),
       ...form,
     };
+
     setEvents((prev) => [newEvent, ...prev]);
-    setForm((prev) => ({
-      ...prev,
+
+    // keep values? or clear?
+    // We’ll clear, but you can comment this out if you want them to stay.
+    setForm({
       client: "",
+      eventName: "",
+      eventType: "",
+      city: "",
       date: "",
-      venue: "",
-      guests: "",
       budget: "",
-      revenue: "",
-      margin: "",
       status: "New",
-      notes: "",
-    }));
+    });
   }
 
   function handleDelete(id: number) {
     if (!confirm("Delete this event?")) return;
-    setEvents((prev) => prev.filter((ev) => ev.id !== id));
+    setEvents((prev) => prev.filter((e) => e.id !== id));
   }
 
   if (!user) return null;
@@ -125,30 +122,29 @@ export default function EventsPage() {
 
   return (
     <main className="eventura-os">
-      {/* Sidebar */}
       <aside className="eventura-sidebar">
         <SidebarCore user={user} active="events" />
       </aside>
 
-      {/* Main */}
       <div className="eventura-main">
         <TopbarCore user={user} />
 
         <div className="eventura-content">
-          <h1 className="eventura-page-title">Events</h1>
+          <h1 className="eventura-title">Events</h1>
           <p className="eventura-subtitle">
-            Manage all events across Surat, Ahmedabad, and Rajkot.
+            Create and manage all Eventura events. These records power your
+            dashboard, pipeline and calendar.
           </p>
 
           <section className="eventura-columns">
             {/* Form */}
-            <div className="eventura-panel">
-              <h2 className="eventura-panel-title">Create / Edit event</h2>
+            <div>
+              <h2 className="eventura-panel-title">Add event</h2>
               <form className="eventura-form" onSubmit={handleSubmit}>
                 <div className="eventura-form-grid">
                   <div className="eventura-field">
                     <label className="eventura-label" htmlFor="client">
-                      Client & Event name
+                      Client name
                     </label>
                     <input
                       id="client"
@@ -156,27 +152,50 @@ export default function EventsPage() {
                       className="eventura-input"
                       value={form.client}
                       onChange={handleChange}
-                      placeholder="Patel Wedding Sangeet"
+                      placeholder="e.g. Mehta Family"
                     />
                   </div>
 
                   <div className="eventura-field">
-                    <label className="eventura-label" htmlFor="type">
+                    <label className="eventura-label" htmlFor="eventName">
+                      Event name
+                    </label>
+                    <input
+                      id="eventName"
+                      name="eventName"
+                      className="eventura-input"
+                      value={form.eventName}
+                      onChange={handleChange}
+                      placeholder="e.g. Wedding Sangeet"
+                    />
+                  </div>
+
+                  <div className="eventura-field">
+                    <label className="eventura-label" htmlFor="eventType">
                       Event type
                     </label>
-                    <select
-                      id="type"
-                      name="type"
-                      className="eventura-select"
-                      value={form.type}
+                    <input
+                      id="eventType"
+                      name="eventType"
+                      className="eventura-input"
+                      value={form.eventType}
                       onChange={handleChange}
-                    >
-                      <option>Wedding</option>
-                      <option>Corporate</option>
-                      <option>Party</option>
-                      <option>Festival</option>
-                      <option>Exhibition</option>
-                    </select>
+                      placeholder="Wedding / Corporate / Party / Festival"
+                    />
+                  </div>
+
+                  <div className="eventura-field">
+                    <label className="eventura-label" htmlFor="city">
+                      City
+                    </label>
+                    <input
+                      id="city"
+                      name="city"
+                      className="eventura-input"
+                      value={form.city}
+                      onChange={handleChange}
+                      placeholder="Surat / Ahmedabad / Rajkot"
+                    />
                   </div>
 
                   <div className="eventura-field">
@@ -190,51 +209,6 @@ export default function EventsPage() {
                       className="eventura-input"
                       value={form.date}
                       onChange={handleChange}
-                    />
-                  </div>
-
-                  <div className="eventura-field">
-                    <label className="eventura-label" htmlFor="city">
-                      City
-                    </label>
-                    <select
-                      id="city"
-                      name="city"
-                      className="eventura-select"
-                      value={form.city}
-                      onChange={handleChange}
-                    >
-                      <option>Surat</option>
-                      <option>Ahmedabad</option>
-                      <option>Rajkot</option>
-                    </select>
-                  </div>
-
-                  <div className="eventura-field">
-                    <label className="eventura-label" htmlFor="venue">
-                      Venue
-                    </label>
-                    <input
-                      id="venue"
-                      name="venue"
-                      className="eventura-input"
-                      value={form.venue}
-                      onChange={handleChange}
-                      placeholder="Laxmi Farm / Taj / Indoor"
-                    />
-                  </div>
-
-                  <div className="eventura-field">
-                    <label className="eventura-label" htmlFor="guests">
-                      Guest count
-                    </label>
-                    <input
-                      id="guests"
-                      name="guests"
-                      className="eventura-input"
-                      value={form.guests}
-                      onChange={handleChange}
-                      placeholder="e.g. 450"
                     />
                   </div>
 
@@ -253,78 +227,23 @@ export default function EventsPage() {
                   </div>
 
                   <div className="eventura-field">
-                    <label className="eventura-label" htmlFor="revenue">
-                      Expected revenue (₹)
-                    </label>
-                    <input
-                      id="revenue"
-                      name="revenue"
-                      className="eventura-input"
-                      value={form.revenue}
-                      onChange={handleChange}
-                      placeholder="Client billing, e.g. 22,00,000"
-                    />
-                  </div>
-
-                  <div className="eventura-field">
-                    <label className="eventura-label" htmlFor="margin">
-                      Expected profit %
-                    </label>
-                    <input
-                      id="margin"
-                      name="margin"
-                      className="eventura-input"
-                      value={form.margin}
-                      onChange={handleChange}
-                      placeholder="e.g. 28"
-                    />
-                  </div>
-
-                  <div className="eventura-field">
                     <label className="eventura-label" htmlFor="status">
                       Status
                     </label>
                     <select
                       id="status"
                       name="status"
-                      className="eventura-select"
+                      className="eventura-input"
                       value={form.status}
                       onChange={handleChange}
                     >
-                      <option>New</option>
-                      <option>Proposal Sent</option>
-                      <option>Negotiation</option>
-                      <option>Confirmed</option>
-                      <option>Completed</option>
+                      <option value="New">New</option>
+                      <option value="Proposal Sent">Proposal Sent</option>
+                      <option value="Negotiation">Negotiation</option>
+                      <option value="Confirmed">Confirmed</option>
+                      <option value="Completed">Completed</option>
                     </select>
                   </div>
-
-                  <div className="eventura-field">
-                    <label className="eventura-label" htmlFor="owner">
-                      Owner (staff)
-                    </label>
-                    <input
-                      id="owner"
-                      name="owner"
-                      className="eventura-input"
-                      value={form.owner}
-                      onChange={handleChange}
-                    />
-                  </div>
-                </div>
-
-                <div className="eventura-field" style={{ marginTop: "0.75rem" }}>
-                  <label className="eventura-label" htmlFor="notes">
-                    Notes
-                  </label>
-                  <textarea
-                    id="notes"
-                    name="notes"
-                    className="eventura-textarea"
-                    value={form.notes}
-                    onChange={handleChange}
-                    placeholder="Client preferences, special instructions…"
-                  />
                 </div>
 
                 <div className="eventura-actions">
@@ -337,52 +256,48 @@ export default function EventsPage() {
 
             {/* List */}
             <div className="eventura-panel">
-              <h2 className="eventura-panel-title">Event list</h2>
+              <h2 className="eventura-panel-title">All events</h2>
               {events.length === 0 ? (
                 <p className="eventura-small-text">
-                  No events yet. Create your first event using the form.
+                  No events yet. Add your first event using the form.
                 </p>
               ) : (
                 <div className="eventura-table-wrapper">
                   <table className="eventura-table">
                     <thead>
                       <tr>
-                        <th>Event ID</th>
-                        <th>Client & Event</th>
-                        <th>Type</th>
                         <th>Date</th>
+                        <th>Client</th>
+                        <th>Event</th>
                         <th>City</th>
                         <th>Budget (₹)</th>
-                        <th>Revenue (₹)</th>
-                        <th>Profit %</th>
                         <th>Status</th>
-                        <th>Owner</th>
-                        <th>Actions</th>
+                        <th></th>
                       </tr>
                     </thead>
                     <tbody>
-                      {events.map((ev) => (
-                        <tr key={ev.id}>
-                          <td>{ev.id}</td>
-                          <td>{ev.client}</td>
-                          <td>{ev.type}</td>
-                          <td>{ev.date}</td>
-                          <td>{ev.city}</td>
-                          <td>{ev.budget}</td>
-                          <td>{ev.revenue}</td>
-                          <td>{ev.margin}</td>
-                          <td>{ev.status}</td>
-                          <td>{ev.owner}</td>
-                          <td>
-                            <button
-                              className="eventura-link-button"
-                              onClick={() => handleDelete(ev.id)}
-                            >
-                              Delete
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
+                      {events
+                        .slice()
+                        .sort((a, b) => (a.date > b.date ? 1 : -1))
+                        .map((ev) => (
+                          <tr key={ev.id}>
+                            <td>{ev.date}</td>
+                            <td>{ev.client}</td>
+                            <td>{ev.eventName || ev.eventType}</td>
+                            <td>{ev.city}</td>
+                            <td>{ev.budget}</td>
+                            <td>{ev.status}</td>
+                            <td>
+                              <button
+                                className="eventura-button-secondary"
+                                type="button"
+                                onClick={() => handleDelete(ev.id)}
+                              >
+                                Delete
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
                     </tbody>
                   </table>
                 </div>
@@ -395,7 +310,7 @@ export default function EventsPage() {
   );
 }
 
-/* Reuse core sidebar + topbar to look like Dashboard */
+/* Re-use common layout pieces */
 
 function SidebarCore({ user, active }: { user: User; active: string }) {
   const isCEO = user.role === "CEO";
@@ -405,33 +320,50 @@ function SidebarCore({ user, active }: { user: User; active: string }) {
         <div className="eventura-logo-circle">E</div>
         <div className="eventura-logo-text">
           <div className="eventura-logo-name">Eventura OS</div>
-          <div className="eventura-logo-tagline">
-            Events that speak your style
-          </div>
         </div>
       </div>
       <nav className="eventura-sidebar-nav">
-        <SidebarLink href="/" label="Dashboard" icon="📊" active={active === "dashboard"} />
-        <SidebarLink href="/events" label="Events" icon="🎉" active={active === "events"} />
-        <SidebarLink href="/calendar" label="Calendar" icon="📅" active={active === "calendar"} />
-        <SidebarLink href="/leads" label="Clients & Leads" icon="👥" active={active === "leads"} />
-        <SidebarLink href="/vendors" label="Vendors" icon="🤝" active={active === "vendors"} />
+        <SidebarLink
+          href="/"
+          label="Dashboard"
+          icon="📊"
+          active={active === "dashboard"}
+        />
+        <SidebarLink
+          href="/events"
+          label="Events"
+          icon="🎉"
+          active={active === "events"}
+        />
+        <SidebarLink
+          href="/calendar"
+          label="Calendar"
+          icon="📅"
+          active={active === "calendar"}
+        />
+        <SidebarLink
+          href="/leads"
+          label="Clients & Leads"
+          icon="👥"
+          active={active === "leads"}
+        />
+        <SidebarLink
+          href="/vendors"
+          label="Vendors"
+          icon="🤝"
+          active={active === "vendors"}
+        />
         {isCEO && (
-          <SidebarLink href="/finance" label="Finance" icon="💰" active={active === "finance"} />
-        )}
-        <SidebarLink href="/hr" label="HR & Team" icon="🧑‍💼" active={active === "hr"} />
-        <SidebarLink href="/inventory" label="Inventory & Assets" icon="📦" active={active === "inventory"} />
-        {isCEO && (
-          <SidebarLink href="/reports" label="Reports & Analytics" icon="📈" active={active === "reports"} />
-        )}
-        {isCEO && (
-          <SidebarLink href="/settings" label="Settings & Access" icon="⚙️" active={active === "settings"} />
+          <SidebarLink
+            href="/finance"
+            label="Finance"
+            icon="💰"
+            active={active === "finance"}
+          />
         )}
       </nav>
       <div className="eventura-sidebar-footer">
-        <div className="eventura-sidebar-role">
-          Role: {user.role === "CEO" ? "CEO / Super Admin" : "Staff"}
-        </div>
+        <div className="eventura-sidebar-role">Role: {user.role}</div>
         <div className="eventura-sidebar-city">City: {user.city}</div>
       </div>
     </>
@@ -447,14 +379,12 @@ function TopbarCore({ user }: { user: User }) {
       <div className="eventura-topbar-center">
         <input
           className="eventura-search"
-          placeholder="Search events, clients, vendors..."
+          placeholder="Search events..."
+          disabled
         />
       </div>
       <div className="eventura-topbar-right">
-        <button className="eventura-topbar-icon" title="Notifications">
-          🔔
-        </button>
-        <div className="eventura-user-avatar" title={user.name}>
+        <div className="eventura-user-avatar">
           {user.name.charAt(0).toUpperCase()}
         </div>
       </div>
