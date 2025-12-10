@@ -2,7 +2,6 @@
 
 import React, { useEffect, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 
 type Role = "CEO" | "Staff";
 type User = { name: string; role: Role; city: string };
@@ -26,6 +25,10 @@ const STAGES: StageKey[] = [
   "Completed",
 ];
 
+type StoredEvent = {
+  status?: string;
+};
+
 type FinanceEntry = {
   id: number;
   month?: string;
@@ -34,18 +37,13 @@ type FinanceEntry = {
   notes?: string;
 };
 
-type StoredEvent = {
-  status?: string;
-};
-
 function parseMoney(value: string): number {
-  const cleaned = value.replace(/[₹, ]/g, "");
+  const cleaned = value.replace(/[₹, ,]/g, "");
   const n = parseFloat(cleaned);
   return isNaN(n) ? 0 : n;
 }
 
 export default function DashboardPage() {
-  const router = useRouter();
   const [user, setUser] = useState<User | null>(null);
 
   const [eventsThisMonth, setEventsThisMonth] = useState(0);
@@ -61,7 +59,7 @@ export default function DashboardPage() {
     Completed: 0,
   });
 
-  // ==== AUTH + LOAD DATA ====
+  // === AUTH + LOAD DATA ===
   useEffect(() => {
     if (typeof window === "undefined") return;
     const raw = window.localStorage.getItem(USER_KEY);
@@ -82,7 +80,7 @@ export default function DashboardPage() {
   function loadDashboardData() {
     if (typeof window === "undefined") return;
 
-    // ---- Events pipeline & count ----
+    // Events
     const eventsRaw = window.localStorage.getItem(EVENTS_KEY);
     if (eventsRaw) {
       try {
@@ -111,7 +109,7 @@ export default function DashboardPage() {
       }
     }
 
-    // ---- Finance totals (latest month drives KPIs) ----
+    // Finance
     const financeRaw = window.localStorage.getItem(FINANCE_KEY);
     if (financeRaw) {
       try {
@@ -139,24 +137,6 @@ export default function DashboardPage() {
       window.localStorage.removeItem(USER_KEY);
       window.location.href = "/login";
     }
-  }
-
-  // ==== Quick action buttons (make them WORK) ====
-
-  function goToNewEvent() {
-    router.push("/events");
-  }
-
-  function goToNewLead() {
-    router.push("/leads");
-  }
-
-  function goToVendorPayment() {
-    router.push("/finance?tab=calculator");
-  }
-
-  function goToDownloadReport() {
-    router.push("/finance?autoDownload=1");
   }
 
   if (!user) return null;
@@ -247,7 +227,7 @@ export default function DashboardPage() {
 
         {/* Page content */}
         <div className="eventura-content">
-          {/* KPI cards (now reading from Finance & Events) */}
+          {/* KPI cards */}
           <section className="eventura-kpi-row">
             <div className="eventura-card">
               <div className="eventura-card-label">Events this month</div>
@@ -301,7 +281,7 @@ export default function DashboardPage() {
             )}
           </section>
 
-          {/* Middle section: pipeline + upcoming events */}
+          {/* Middle section */}
           <section className="eventura-middle">
             {/* Event pipeline */}
             <div className="eventura-panel">
@@ -318,12 +298,11 @@ export default function DashboardPage() {
               </div>
 
               <div className="eventura-small-text">
-                Numbers above come directly from Events statuses (New, Proposal,
-                Negotiation, Confirmed, Completed).
+                Numbers above come directly from Events statuses.
               </div>
             </div>
 
-            {/* Calendar & upcoming events (still static demo) */}
+            {/* Upcoming (still sample) */}
             <div className="eventura-panel">
               <h2 className="eventura-panel-title">
                 Upcoming 7 events (sample view)
@@ -370,36 +349,36 @@ export default function DashboardPage() {
                 </li>
               </ul>
               <div className="eventura-small-text">
-                Later we can wire this to a real Calendar module.
+                Later we can wire this to real Calendar data.
               </div>
             </div>
           </section>
 
-          {/* Quick actions – ALL BUTTONS WIRED */}
+          {/* Quick actions — NOW USING LINKS (WILL ALWAYS WORK) */}
           <section className="eventura-quick-actions">
-            <button className="eventura-button" onClick={goToNewEvent}>
+            <Link href="/events" className="eventura-button">
               + New Event
-            </button>
-            <button
-              className="eventura-button-secondary"
-              onClick={goToNewLead}
-            >
+            </Link>
+
+            <Link href="/leads" className="eventura-button-secondary">
               + New Lead
-            </button>
+            </Link>
+
             {isCEO && (
               <>
-                <button
+                <Link
+                  href="/finance?tab=calculator"
                   className="eventura-button-secondary"
-                  onClick={goToVendorPayment}
                 >
                   + Vendor Payment
-                </button>
-                <button
+                </Link>
+
+                <Link
+                  href="/finance?autoDownload=1"
                   className="eventura-button-secondary"
-                  onClick={goToDownloadReport}
                 >
                   Download Monthly Report
-                </button>
+                </Link>
               </>
             )}
           </section>
