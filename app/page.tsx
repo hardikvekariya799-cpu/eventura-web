@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 export default function Home() {
   return (
     <main className="eventura-page">
@@ -15,6 +17,22 @@ export default function Home() {
             Cofounders: Hardik · Shubh · Dixit
           </div>
         </header>
+
+        {/* Top navigation */}
+        <nav className="eventura-nav">
+          <Link
+            href="/"
+            className="eventura-nav-link eventura-nav-link-active"
+          >
+            Dashboard
+          </Link>
+          <Link href="/events" className="eventura-nav-link">
+            Events
+          </Link>
+          <Link href="/finance" className="eventura-nav-link">
+            Finance
+          </Link>
+        </nav>
 
         {/* Summary cards */}
         <section className="eventura-grid">
