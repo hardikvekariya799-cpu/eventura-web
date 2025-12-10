@@ -71,6 +71,7 @@ export default function DashboardPage() {
   // search
   const [searchTerm, setSearchTerm] = useState("");
   const [searchResults, setSearchResults] = useState<StoredEvent[]>([]);
+  const [hasSearched, setHasSearched] = useState(false);
 
   // === AUTH + LOAD DATA ===
   useEffect(() => {
@@ -104,10 +105,10 @@ export default function DashboardPage() {
       }
     }
 
-    // events this month
     const now = new Date();
     const currentMonth = now.getMonth();
     const currentYear = now.getFullYear();
+
     const eventsThisMonthCount = list.filter((ev) => {
       if (!ev.date) return false;
       const d = new Date(ev.date + "T00:00:00");
@@ -115,7 +116,6 @@ export default function DashboardPage() {
     }).length;
     setEventsThisMonth(eventsThisMonthCount);
 
-    // pipeline
     const counts: Record<StageKey, number> = {
       "New Leads": 0,
       "Proposal Sent": 0,
@@ -134,7 +134,6 @@ export default function DashboardPage() {
     }
     setPipeCounts(counts);
 
-    // upcoming 7 events
     const today = new Date();
     const upcoming = list
       .filter((ev) => {
@@ -180,10 +179,13 @@ export default function DashboardPage() {
   function handleSearch() {
     if (typeof window === "undefined") return;
     const q = searchTerm.trim().toLowerCase();
+    setHasSearched(true); // <-- important: always show result panel after pressing search
+
     if (!q) {
       setSearchResults([]);
       return;
     }
+
     const eventsRaw = window.localStorage.getItem(EVENTS_KEY);
     if (!eventsRaw) {
       setSearchResults([]);
@@ -453,28 +455,39 @@ export default function DashboardPage() {
             )}
           </section>
 
-          {/* Search results area */}
-          {searchResults.length > 0 && (
+          {/* Search results area – now always shows after search */}
+          {hasSearched && (
             <section style={{ marginTop: "1.5rem" }}>
               <h2 className="eventura-panel-title">Search results (events)</h2>
               <div className="eventura-panel">
-                <ul className="eventura-list">
-                  {searchResults.map((ev) => (
-                    <li key={ev.id} className="eventura-list-item">
-                      <div>
-                        <div className="eventura-list-title">
-                          {ev.client} – {ev.eventName || ev.eventType}
+                {searchTerm.trim() === "" ? (
+                  <p className="eventura-small-text">
+                    Type something in the search box and press Enter or click
+                    🔍.
+                  </p>
+                ) : searchResults.length === 0 ? (
+                  <p className="eventura-small-text">
+                    No events found for "<b>{searchTerm}</b>".
+                  </p>
+                ) : (
+                  <ul className="eventura-list">
+                    {searchResults.map((ev) => (
+                      <li key={ev.id} className="eventura-list-item">
+                        <div>
+                          <div className="eventura-list-title">
+                            {ev.client} – {ev.eventName || ev.eventType}
+                          </div>
+                          <div className="eventura-list-sub">
+                            {ev.date} · {ev.city} · Budget: ₹{ev.budget}
+                          </div>
                         </div>
-                        <div className="eventura-list-sub">
-                          {ev.date} · {ev.city} · Budget: ₹{ev.budget}
-                        </div>
-                      </div>
-                      <span className="eventura-tag eventura-tag-green">
-                        {ev.status}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
+                        <span className="eventura-tag eventura-tag-green">
+                          {ev.status}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </div>
             </section>
           )}
