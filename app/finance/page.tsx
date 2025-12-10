@@ -42,12 +42,11 @@ export default function FinancePage() {
   const [activeTab, setActiveTab] =
     useState<"overview" | "calculator">("overview");
 
-  // calculator tab
   const [calcIncome, setCalcIncome] = useState("");
   const [calcExpenses, setCalcExpenses] = useState("");
   const [autoDownloadRequested, setAutoDownloadRequested] = useState(false);
 
-  // ---- AUTH ----
+  // AUTH
   useEffect(() => {
     if (typeof window === "undefined") return;
     const raw = window.localStorage.getItem(USER_KEY);
@@ -69,7 +68,7 @@ export default function FinancePage() {
     }
   }, []);
 
-  // ---- LOAD ENTRIES ----
+  // LOAD ENTRIES
   useEffect(() => {
     if (typeof window === "undefined") return;
     const raw = window.localStorage.getItem(FINANCE_KEY);
@@ -82,13 +81,13 @@ export default function FinancePage() {
     }
   }, []);
 
-  // ---- SAVE ENTRIES ----
+  // SAVE ENTRIES
   useEffect(() => {
     if (typeof window === "undefined") return;
     window.localStorage.setItem(FINANCE_KEY, JSON.stringify(entries));
   }, [entries]);
 
-  // ---- READ URL QUERY (tab & autoDownload) WITHOUT useSearchParams ----
+  // READ QUERY MANUALLY (NO useSearchParams)
   useEffect(() => {
     if (typeof window === "undefined") return;
     const params = new URLSearchParams(window.location.search);
@@ -104,7 +103,7 @@ export default function FinancePage() {
     }
   }, []);
 
-  // when entries loaded AND autoDownloadRequested -> download once
+  // trigger auto download once
   useEffect(() => {
     if (autoDownloadRequested && entries.length > 0) {
       handleDownload();
@@ -177,7 +176,7 @@ export default function FinancePage() {
     URL.revokeObjectURL(url);
   }
 
-  // Totals for summary cards
+  // totals for cards
   let totalIncome = 0;
   let totalExpenses = 0;
   for (const e of entries) {
@@ -187,7 +186,7 @@ export default function FinancePage() {
   const net = totalIncome - totalExpenses;
   const margin = totalIncome > 0 ? (net / totalIncome) * 100 : 0;
 
-  // calculator derived values
+  // calculator values
   const calcIncNum = parseMoney(calcIncome);
   const calcExpNum = parseMoney(calcExpenses);
   const calcNet = calcIncNum - calcExpNum;
@@ -283,7 +282,7 @@ export default function FinancePage() {
           </div>
 
           {activeTab === "overview" ? (
-            // ===== OVERVIEW TAB =====
+            /* OVERVIEW TAB */
             <section className="eventura-columns">
               <div>
                 <h2 className="eventura-panel-title">Add finance record</h2>
@@ -416,7 +415,7 @@ export default function FinancePage() {
               </div>
             </section>
           ) : (
-            // ===== CALCULATOR TAB =====
+            /* CALCULATOR TAB */
             <section className="eventura-columns">
               <div className="eventura-panel">
                 <h2 className="eventura-panel-title">
