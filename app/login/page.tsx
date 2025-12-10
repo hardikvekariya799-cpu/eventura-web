@@ -21,7 +21,7 @@ type StoredUser = {
 const USER_KEY = "eventura-user";
 
 /**
- * Predefined users for now (you can change these)
+ * Your real login accounts.
  *
  * CEO LOGIN:
  *   Email: ceo@eventura.in
@@ -30,6 +30,8 @@ const USER_KEY = "eventura-user";
  * STAFF LOGIN:
  *   Email: staff@eventura.in
  *   Password: Eventura@123
+ *
+ * (These are NOT shown on UI now, only here in code.)
  */
 const USERS: UserRecord[] = [
   {
@@ -49,8 +51,8 @@ const USERS: UserRecord[] = [
 ];
 
 export default function LoginPage() {
-  const [email, setEmail] = useState("ceo@eventura.in");
-  const [password, setPassword] = useState("Eventura@123");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   function handleSubmit(e: React.FormEvent) {
@@ -78,7 +80,6 @@ export default function LoginPage() {
 
     if (typeof window !== "undefined") {
       window.localStorage.setItem(USER_KEY, JSON.stringify(storedUser));
-      // Go to dashboard
       window.location.href = "/";
     }
   }
@@ -110,7 +111,14 @@ export default function LoginPage() {
           boxShadow: "0 24px 60px rgba(0,0,0,0.8)",
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", marginBottom: "1.25rem", gap: "0.75rem" }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            marginBottom: "1.25rem",
+            gap: "0.75rem",
+          }}
+        >
           <div
             style={{
               width: "40px",
@@ -160,8 +168,7 @@ export default function LoginPage() {
             marginBottom: "1rem",
           }}
         >
-          Use your Eventura login ID and password. CEO sees all modules, staff
-          sees limited access.
+          Use your Eventura login ID and password.
         </p>
 
         {error && (
@@ -180,7 +187,10 @@ export default function LoginPage() {
           </div>
         )}
 
-        <form onSubmit={handleSubmit} style={{ display: "grid", gap: "0.8rem" }}>
+        <form
+          onSubmit={handleSubmit}
+          style={{ display: "grid", gap: "0.8rem" }}
+        >
           <div>
             <label
               htmlFor="email"
@@ -263,22 +273,6 @@ export default function LoginPage() {
             Sign in
           </button>
         </form>
-
-        <div
-          style={{
-            marginTop: "1.1rem",
-            paddingTop: "0.7rem",
-            borderTop: "1px solid #1f2937",
-            fontSize: "0.75rem",
-            color: "#9ca3af",
-          }}
-        >
-          <div style={{ marginBottom: "0.25rem", fontWeight: 500 }}>
-            Test logins:
-          </div>
-          <div>CEO → ceo@eventura.in / Eventura@123</div>
-          <div>Staff → staff@eventura.in / Eventura@123</div>
-        </div>
       </div>
     </main>
   );
