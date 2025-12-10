@@ -2,7 +2,6 @@
 
 import React, { useEffect, useState } from "react";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
 
 type Role = "CEO" | "Staff";
 type User = { name: string; role: Role; city: string };
@@ -31,7 +30,6 @@ function formatCurrency(value: number): string {
 }
 
 export default function FinancePage() {
-  const searchParams = useSearchParams();
   const [user, setUser] = useState<User | null>(null);
   const [entries, setEntries] = useState<FinanceEntry[]>([]);
   const [form, setForm] = useState<Omit<FinanceEntry, "id">>({
@@ -44,11 +42,12 @@ export default function FinancePage() {
   const [activeTab, setActiveTab] =
     useState<"overview" | "calculator">("overview");
 
-  // Calculator tab state
+  // calculator tab
   const [calcIncome, setCalcIncome] = useState("");
   const [calcExpenses, setCalcExpenses] = useState("");
+  const [autoDownloadRequested, setAutoDownloadRequested] = useState(false);
 
-  // AUTH
+  // ---- AUTH ----
   useEffect(() => {
     if (typeof window === "undefined") return;
     const raw = window.localStorage.getItem(USER_KEY);
@@ -70,7 +69,7 @@ export default function FinancePage() {
     }
   }, []);
 
-  // Load entries
+  // ---- LOAD ENTRIES ----
   useEffect(() => {
     if (typeof window === "undefined") return;
     const raw = window.localStorage.getItem(FINANCE_KEY);
@@ -83,24 +82,35 @@ export default function FinancePage() {
     }
   }, []);
 
-  // Save entries
+  // ---- SAVE ENTRIES ----
   useEffect(() => {
     if (typeof window === "undefined") return;
     window.localStorage.setItem(FINANCE_KEY, JSON.stringify(entries));
   }, [entries]);
 
-  // Handle query params (tab + autoDownload from dashboard)
+  // ---- READ URL QUERY (tab & autoDownload) WITHOUT useSearchParams ----
   useEffect(() => {
-    const tab = searchParams.get("tab");
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+
+    const tab = params.get("tab");
     if (tab === "calculator") {
       setActiveTab("calculator");
     }
 
-    const autoDownload = searchParams.get("autoDownload");
-    if (autoDownload === "1" && entries.length > 0) {
-      handleDownload();
+    const autoDownload = params.get("autoDownload");
+    if (autoDownload === "1") {
+      setAutoDownloadRequested(true);
     }
-  }, [searchParams, entries]);
+  }, []);
+
+  // when entries loaded AND autoDownloadRequested -> download once
+  useEffect(() => {
+    if (autoDownloadRequested && entries.length > 0) {
+      handleDownload();
+      setAutoDownloadRequested(false);
+    }
+  }, [autoDownloadRequested, entries]);
 
   function handleChange(
     e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>
@@ -167,7 +177,7 @@ export default function FinancePage() {
     URL.revokeObjectURL(url);
   }
 
-  // Totals for cards
+  // Totals for summary cards
   let totalIncome = 0;
   let totalExpenses = 0;
   for (const e of entries) {
@@ -177,7 +187,7 @@ export default function FinancePage() {
   const net = totalIncome - totalExpenses;
   const margin = totalIncome > 0 ? (net / totalIncome) * 100 : 0;
 
-  // Calculator derived values
+  // calculator derived values
   const calcIncNum = parseMoney(calcIncome);
   const calcExpNum = parseMoney(calcExpenses);
   const calcNet = calcIncNum - calcExpNum;
@@ -499,7 +509,7 @@ export default function FinancePage() {
   );
 }
 
-/* Reuse sidebar/topbar shell same as Events page */
+/* Sidebar + topbar reused */
 
 function SidebarCore({ user, active }: { user: User; active: string }) {
   const isCEO = user.role === "CEO";
