@@ -62,7 +62,18 @@ type TrainingItem = {
   afterScore?: number;
 };
 
-/* ========= Seed data (can later move to localStorage or backend) ========= */
+type HRSummary = {
+  coreCount: number;
+  freelancersCount: number;
+  traineesCount: number;
+  totalCost: number;
+  avgWorkload: number;
+  roleCounts: Record<StaffRole, number>;
+  weddingsCapacity: number;
+  corporatesCapacity: number;
+};
+
+/* ========= Seed data ========= */
 
 const seedTeam: TeamMember[] = [
   {
@@ -267,7 +278,6 @@ export default function HRPage() {
   const [candidates] = useState<Candidate[]>(seedCandidates);
   const [training] = useState<TrainingItem[]>(seedTraining);
 
-  // Simple view switch inside HR tab
   const [view, setView] = useState<"home" | "scheduling" | "hiring" | "training">(
     "home"
   );
@@ -289,7 +299,7 @@ export default function HRPage() {
     }
   }, []);
 
-  const summary = useMemo(() => {
+  const summary: HRSummary = useMemo(() => {
     const core = team.filter((m) => m.status === "Core");
     const freelancers = team.filter((m) => m.status === "Freelancer");
     const trainees = team.filter((m) => m.status === "Trainee");
@@ -317,8 +327,6 @@ export default function HRPage() {
       roleCounts[m.role] = (roleCounts[m.role] || 0) + 1;
     });
 
-    // Rough capacity: assume each core Event Manager can handle ~3 weddings/month,
-    // each Decor ~3, each Logistics ~4. We keep it simple.
     const eventManagers = core.filter((m) => m.role === "Event Manager").length;
     const decor = core.filter((m) => m.role === "Decor Specialist").length;
     const logistics = core.filter((m) => m.role === "Logistics").length;
@@ -444,33 +452,10 @@ function HRHomeView({
   team,
   isCEO,
 }: {
-  summary: ReturnType<typeof computeSummaryDummy>;
+  summary: HRSummary;
   team: TeamMember[];
   isCEO: boolean;
 }) {
-  // Type helper: we call computeSummaryDummy only for type, actual summary is from useMemo
-  function computeSummaryDummy() {
-    return {
-      coreCount: 0,
-      freelancersCount: 0,
-      traineesCount: 0,
-      totalCost: 0,
-      avgWorkload: 0,
-      roleCounts: {
-        "Event Manager": 0,
-        "Decor Specialist": 0,
-        Logistics: 0,
-        Marketing: 0,
-        Sales: 0,
-        Accountant: 0,
-        Operations: 0,
-      } as Record<StaffRole, number>,
-      weddingsCapacity: 0,
-      corporatesCapacity: 0,
-    };
-  }
-
-  // Find role-level workload “heatmap”
   const roles: StaffRole[] = [
     "Event Manager",
     "Decor Specialist",
@@ -520,7 +505,9 @@ function HRHomeView({
         </div>
         <div className="eventura-card eventura-card-glow">
           <p className="eventura-card-label">Monthly salary run</p>
-          <p className="eventura-card-value">₹{summary.totalCost.toLocaleString("en-IN")}</p>
+          <p className="eventura-card-value">
+            ₹{summary.totalCost.toLocaleString("en-IN")}
+          </p>
           <p className="eventura-card-note">
             Linked to break-even: keep HR cost lean vs revenue.
           </p>
@@ -560,15 +547,13 @@ function HRHomeView({
                       No core staff yet
                     </span>
                   ) : (
-                    <>
-                      <span
-                        className={
-                          "eventura-tag " + gaugeColor(r.avgWorkload)
-                        }
-                      >
-                        {r.avgWorkload}% · {workloadLabel(r.avgWorkload)}
-                      </span>
-                    </>
+                    <span
+                      className={
+                        "eventura-tag " + gaugeColor(r.avgWorkload)
+                      }
+                    >
+                      {r.avgWorkload}% · {workloadLabel(r.avgWorkload)}
+                    </span>
                   )}
                 </p>
               </div>
@@ -616,36 +601,29 @@ function HRSchedulingView({
   summary,
 }: {
   team: TeamMember[];
-  summary: {
-    weddingsCapacity: number;
-    corporatesCapacity: number;
-    coreCount: number;
-    freelancersCount: number;
-    traineesCount: number;
-  };
+  summary: HRSummary;
 }) {
-  // Dummy schedule of next 7–10 days
   const schedule = [
     {
       date: "2025-12-14",
       label: "Patel Wedding Sangeet",
       city: "Surat",
       crew: ["Shubh", "Priya Shah", "Jay Patel", "Decor Crew A"],
-      risk: "Medium",
+      risk: "Medium" as "Low" | "Medium" | "High",
     },
     {
       date: "2025-12-16",
       label: "Corporate Gala – XYZ Textiles",
       city: "Surat",
       crew: ["Shubh", "Riya Mehta", "Logistics Crew A"],
-      risk: "Low",
+      risk: "Low" as "Low" | "Medium" | "High",
     },
     {
       date: "2025-12-18",
       label: "Mehta Engagement",
       city: "Surat",
       crew: ["Trainee Planner", "Priya Shah"],
-      risk: "Medium",
+      risk: "Medium" as "Low" | "Medium" | "High",
     },
   ];
 
@@ -676,7 +654,9 @@ function HRSchedulingView({
 
       <section className="eventura-columns">
         <div className="eventura-panel">
-          <h2 className="eventura-panel-title">Crew scheduling – upcoming events</h2>
+          <h2 className="eventura-panel-title">
+            Crew scheduling – upcoming events
+          </h2>
           <div className="eventura-table-wrapper">
             <table className="eventura-table">
               <thead>
@@ -763,11 +743,11 @@ function HRSchedulingView({
               </tbody>
             </table>
           </div>
-            <p className="eventura-small-text" style={{ marginTop: "0.5rem" }}>
-               When workload {">"} 90% consistently, HR alert: consider adding freelancers                
-               or hiring.
-             </p>
-      </div>
+          <p className="eventura-small-text" style={{ marginTop: "0.5rem" }}>
+            When workload {">"} 90% consistently, HR alert: consider adding
+            freelancers or hiring.
+          </p>
+        </div>
       </section>
     </>
   );
@@ -826,7 +806,10 @@ function HRHiringView({
                     candidate(s)
                   </span>
                 </p>
-                <ul className="eventura-bullets" style={{ marginTop: "0.4rem" }}>
+                <ul
+                  className="eventura-bullets"
+                  style={{ marginTop: "0.4rem" }}
+                >
                   {stageCandidates.length === 0 && (
                     <li style={{ color: "#9ca3af", fontSize: "0.8rem" }}>
                       No candidates at this stage yet.
@@ -901,15 +884,21 @@ function HRHiringView({
         <ul className="eventura-bullets">
           <li>
             Decor freelancers:{" "}
-            {team.filter(
-              (m) => m.status === "Freelancer" && m.role === "Decor Specialist"
-            ).length}
+            {
+              team.filter(
+                (m) =>
+                  m.status === "Freelancer" &&
+                  m.role === "Decor Specialist"
+              ).length
+            }
           </li>
           <li>
             Logistics freelancers:{" "}
-            {team.filter(
-              (m) => m.status === "Freelancer" && m.role === "Logistics"
-            ).length}
+            {
+              team.filter(
+                (m) => m.status === "Freelancer" && m.role === "Logistics"
+              ).length
+            }
           </li>
         </ul>
         <p className="eventura-small-text">
