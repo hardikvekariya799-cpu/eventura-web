@@ -1,150 +1,99 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useState } from "react";
 import Link from "next/link";
 
 type Role = "CEO" | "Staff";
 type User = { name: string; role: Role; city: string };
 
 const USER_KEY = "eventura-user";
-const EVENTS_KEY = "eventura-events-v2";
+const EVENTS_KEY = "eventura-events";
 
-type EventStatus = "Planning" | "In Execution" | "Completed" | "Cancelled";
+type EventStatus =
+  | "New Lead"
+  | "Proposal Sent"
+  | "Negotiation"
+  | "Confirmed"
+  | "Planning"
+  | "In Execution"
+  | "Completed"
+  | "Cancelled";
+
 type EventType = "Wedding" | "Corporate" | "Party" | "Festival" | "Other";
 
-type EventTask = {
-  id: number;
-  label: string;
-  dueDate: string; // ISO string
-  done: boolean;
-  critical: boolean;
-};
+type VendorStatus = "Planned" | "Advance Paid" | "Paid" | "Cancelled";
 
-type PaymentStage = {
-  label: string;
-  duePercent: number;
-  status: "Pending" | "Paid" | "Overdue";
-};
-
-type VendorScore = {
-  vendorName: string;
-  category: string;
-  score: number; // 0–100
-  notes?: string;
-};
-
-type EventIssue = {
-  id: number;
-  time: string;
-  text: string;
-  resolved: boolean;
-};
-
-type EventuraEvent = {
+type VendorAssignment = {
   id: number;
   name: string;
-  clientName: string;
-  type: EventType;
-  city: string;
-  date: string; // yyyy-mm-dd
-  guestCount: number;
-  budget: number;
-  status: EventStatus;
-  createdAt: string;
-
-  // Planning
-  autoTimeline: EventTask[];
-  tasks: EventTask[];
-  moodboard: string[]; // URLs or notes
-  venueLayoutNotes: string;
-
-  // Finance
-  revenue: number;
-  variableCost: number;
-  fixedCost: number;
-  vendorPayoutPercent: number;
-  paymentPlan: PaymentStage[];
-
-  // Vendors
-  vendorScores: VendorScore[];
-  blacklistFlag: boolean;
-
-  // Execution
-  issues: EventIssue[];
-
-  // Post-event
-  clientScore?: number; // 1–10
-  learnings?: string;
+  category: string;
+  amount: string;
+  status: VendorStatus;
 };
 
-function parseNumber(value: string): number {
+type IssueStatus = "Open" | "Resolved";
+
+type IssueItem = {
+  id: number;
+  text: string;
+  status: IssueStatus;
+  createdAt: string;
+};
+
+type EventItem = {
+  id: number;
+  clientName: string;
+  eventName: string;
+  eventType: EventType;
+  city: string;
+  venue: string;
+  date: string; // ISO yyyy-mm-dd
+  guests: string;
+  budget: string;
+  status: EventStatus;
+  leadSource: string;
+  owner: string;
+  notes: string;
+  vendors?: VendorAssignment[];
+  issues?: IssueItem[];
+};
+
+function parseMoney(value: string): number {
   const cleaned = value.replace(/[₹, ]/g, "");
   const n = parseFloat(cleaned);
   return isNaN(n) ? 0 : n;
 }
 
-function formatCurrency(n: number): string {
-  return "₹" + n.toLocaleString("en-IN", { maximumFractionDigits: 0 });
-}
-
-function addDays(date: Date, delta: number): Date {
-  const copy = new Date(date);
-  copy.setDate(copy.getDate() + delta);
-  return copy;
-}
-
-function formatShort(date: Date): string {
-  return date.toLocaleDateString("en-IN", {
-    day: "2-digit",
-    month: "short",
-  });
-}
-
-// Generate auto timeline based on event date
-function generateAutoTimeline(dateStr: string): EventTask[] {
-  const base = new Date(dateStr + "T00:00:00");
-  if (isNaN(base.getTime())) return [];
-
-  const milestones = [
-    { label: "Venue booking", offset: -60, critical: true },
-    { label: "Vendor confirmations", offset: -45, critical: true },
-    { label: "Decor mockups ready", offset: -30, critical: true },
-    { label: "Logistics planning", offset: -7, critical: true },
-    { label: "Material loading", offset: -3, critical: true },
-    { label: "Event day execution", offset: 0, critical: true },
-    { label: "Post-event payment follow-up", offset: 3, critical: false },
-  ];
-
-  return milestones.map((m, idx) => {
-    const d = addDays(base, m.offset);
-    return {
-      id: Date.now() + idx,
-      label: m.label,
-      dueDate: d.toISOString(),
-      done: false,
-      critical: m.critical,
-    };
+function formatCurrency(value: number): string {
+  return value.toLocaleString("en-IN", {
+    maximumFractionDigits: 0,
   });
 }
 
 export default function EventsPage() {
   const [user, setUser] = useState<User | null>(null);
-  const [events, setEvents] = useState<EventuraEvent[]>([]);
+  const [events, setEvents] = useState<EventItem[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState<EventStatus | "All">("All");
 
-  // simple event form
-  const [form, setForm] = useState({
-    name: "",
+  const [form, setForm] = useState<Omit<EventItem, "id">>({
     clientName: "",
-    type: "Wedding" as EventType,
-    city: "Surat",
+    eventName: "",
+    eventType: "Wedding",
+    city: "",
+    venue: "",
     date: "",
-    guestCount: "",
+    guests: "",
     budget: "",
+    status: "New Lead",
+    leadSource: "",
+    owner: "",
+    notes: "",
+    vendors: [],
+    issues: [],
   });
-
-  // issue input
-  const [issueText, setIssueText] = useState("");
 
   // auth
   useEffect(() => {
@@ -157,6 +106,9 @@ export default function EventsPage() {
     try {
       const u: User = JSON.parse(raw);
       setUser(u);
+      if (!form.owner) {
+        setForm((prev) => ({ ...prev, owner: u.name }));
+      }
     } catch {
       window.localStorage.removeItem(USER_KEY);
       window.location.href = "/login";
@@ -169,10 +121,57 @@ export default function EventsPage() {
     const raw = window.localStorage.getItem(EVENTS_KEY);
     if (raw) {
       try {
-        setEvents(JSON.parse(raw));
+        const parsed: EventItem[] = JSON.parse(raw).map((e: any) => ({
+          ...e,
+          vendors: e.vendors ?? [],
+          issues: e.issues ?? [],
+        }));
+        setEvents(parsed);
+        if (parsed.length > 0) {
+          setSelectedId(parsed[0].id);
+        }
       } catch {
         // ignore
       }
+    } else {
+      // seed example data once
+      const seed: EventItem[] = [
+        {
+          id: Date.now(),
+          clientName: "Patel Family",
+          eventName: "Patel Wedding Sangeet",
+          eventType: "Wedding",
+          city: "Surat",
+          venue: "Laxmi Farm",
+          date: new Date().toISOString().slice(0, 10),
+          guests: "450",
+          budget: "1850000",
+          status: "Planning",
+          leadSource: "Instagram",
+          owner: "Hardik",
+          notes: "Royal floral + gold theme; live dhol & DJ.",
+          vendors: [
+            {
+              id: 1,
+              name: "Royal Decor Studio",
+              category: "Decor",
+              amount: "650000",
+              status: "Planned",
+            },
+            {
+              id: 2,
+              name: "Shree Caterers",
+              category: "Catering",
+              amount: "750000",
+              status: "Planned",
+            },
+          ],
+          issues: [],
+        },
+      ];
+      setEvents(seed);
+      setSelectedId(seed[0].id);
+      window.localStorage.setItem(EVENTS_KEY, JSON.stringify(seed));
     }
   }, []);
 
@@ -182,200 +181,116 @@ export default function EventsPage() {
     window.localStorage.setItem(EVENTS_KEY, JSON.stringify(events));
   }, [events]);
 
-  const selectedEvent = useMemo(
-    () => events.find((e) => e.id === selectedId) ?? null,
-    [events, selectedId]
-  );
-
   function handleFormChange(
-    e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>
+    e: React.ChangeEvent<
+      HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement
+    >
   ) {
     const { name, value } = e.target;
     setForm((prev) => ({ ...prev, [name]: value }));
   }
 
-  function handleCreateEvent(e: React.FormEvent) {
+  function resetForm() {
+    setEditingId(null);
+    setForm({
+      clientName: "",
+      eventName: "",
+      eventType: "Wedding",
+      city: "",
+      venue: "",
+      date: "",
+      guests: "",
+      budget: "",
+      status: "New Lead",
+      leadSource: "",
+      owner: user?.name ?? "",
+      notes: "",
+      vendors: [],
+      issues: [],
+    });
+  }
+
+  function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!form.name || !form.clientName || !form.date) {
-      alert("Please fill event name, client and date.");
+
+    if (!form.clientName || !form.eventName || !form.date) {
+      alert("Client name, event name and date are required.");
       return;
     }
 
-    const budget = parseNumber(form.budget);
-    const guestCount = parseNumber(form.guestCount);
-    const revenue = budget || guestCount * 1500;
-    const variableCost = Math.round(revenue * 0.7);
-    const fixedCost = Math.round(revenue * 0.2);
-    const autoTimeline = generateAutoTimeline(form.date);
+    if (editingId == null) {
+      const newEvent: EventItem = {
+        id: Date.now(),
+        ...form,
+      };
+      setEvents((prev) => [newEvent, ...prev]);
+      setSelectedId(newEvent.id);
+    } else {
+      setEvents((prev) =>
+        prev.map((ev) =>
+          ev.id === editingId
+            ? { ...ev, ...form, vendors: form.vendors ?? [], issues: form.issues ?? [] }
+            : ev
+        )
+      );
+    }
 
-    const paymentPlan: PaymentStage[] = [
-      { label: "Advance (50%)", duePercent: 50, status: "Pending" },
-      { label: "Pre-event (40%)", duePercent: 40, status: "Pending" },
-      { label: "Post-event (10%)", duePercent: 10, status: "Pending" },
-    ];
+    resetForm();
+  }
 
-    const vendorScores: VendorScore[] = [
-      {
-        vendorName: "Default Decor Partner",
-        category: "Decor",
-        score: 85,
-        notes: "Reliable for weddings",
-      },
-    ];
-
-    const newEvent: EventuraEvent = {
-      id: Date.now(),
-      name: form.name.trim(),
-      clientName: form.clientName.trim(),
-      type: form.type,
-      city: form.city,
-      date: form.date,
-      guestCount,
-      budget: revenue,
-      status: "Planning",
-      createdAt: new Date().toISOString(),
-      autoTimeline,
-      tasks: autoTimeline,
-      moodboard: [],
-      venueLayoutNotes: "",
-      revenue,
-      variableCost,
-      fixedCost,
-      vendorPayoutPercent: 70,
-      paymentPlan,
-      vendorScores,
-      blacklistFlag: false,
-      issues: [],
-    };
-
-    setEvents((prev) => [newEvent, ...prev]);
-    setSelectedId(newEvent.id);
+  function handleEdit(eventId: number) {
+    const ev = events.find((e) => e.id === eventId);
+    if (!ev) return;
+    setEditingId(ev.id);
     setForm({
-      name: "",
-      clientName: "",
-      type: "Wedding",
-      city: "Surat",
-      date: "",
-      guestCount: "",
-      budget: "",
+      clientName: ev.clientName,
+      eventName: ev.eventName,
+      eventType: ev.eventType,
+      city: ev.city,
+      venue: ev.venue,
+      date: ev.date,
+      guests: ev.guests,
+      budget: ev.budget,
+      status: ev.status,
+      leadSource: ev.leadSource,
+      owner: ev.owner,
+      notes: ev.notes,
+      vendors: ev.vendors ?? [],
+      issues: ev.issues ?? [],
+    });
+    setSelectedId(ev.id);
+  }
+
+  function handleDelete(eventId: number) {
+    if (!confirm("Delete this event? This cannot be undone.")) return;
+    setEvents((prev) => {
+      const next = prev.filter((e) => e.id !== eventId);
+      if (selectedId === eventId) {
+        setSelectedId(next.length ? next[0].id : null);
+      }
+      if (editingId === eventId) {
+        resetForm();
+      }
+      return next;
     });
   }
 
-  function updateEvent(id: number, updater: (ev: EventuraEvent) => EventuraEvent) {
-    setEvents((prev) => prev.map((e) => (e.id === id ? updater(e) : e)));
+  function handleUpdateEvent(updated: EventItem) {
+    setEvents((prev) => prev.map((e) => (e.id === updated.id ? updated : e)));
   }
 
-  function handleTaskToggle(eventId: number, taskId: number) {
-    updateEvent(eventId, (ev) => ({
-      ...ev,
-      tasks: ev.tasks.map((t) =>
-        t.id === taskId ? { ...t, done: !t.done } : t
-      ),
-    }));
-  }
+  const filteredEvents = events.filter((ev) => {
+    const matchSearch =
+      !search ||
+      ev.clientName.toLowerCase().includes(search.toLowerCase()) ||
+      ev.eventName.toLowerCase().includes(search.toLowerCase()) ||
+      ev.city.toLowerCase().includes(search.toLowerCase());
+    const matchStatus =
+      statusFilter === "All" ? true : ev.status === statusFilter;
+    return matchSearch && matchStatus;
+  });
 
-  function handleStatusChange(eventId: number, status: EventStatus) {
-    updateEvent(eventId, (ev) => ({ ...ev, status }));
-  }
-
-  function handlePaymentStatusChange(
-    eventId: number,
-    index: number,
-    status: PaymentStage["status"]
-  ) {
-    updateEvent(eventId, (ev) => {
-      const updated = [...ev.paymentPlan];
-      updated[index] = { ...updated[index], status };
-      return { ...ev, paymentPlan: updated };
-    });
-  }
-
-  function handleBlacklistToggle(eventId: number) {
-    updateEvent(eventId, (ev) => ({ ...ev, blacklistFlag: !ev.blacklistFlag }));
-  }
-
-  function handleIssueAdd() {
-    if (!selectedEvent || !issueText.trim()) return;
-    const issue: EventIssue = {
-      id: Date.now(),
-      text: issueText.trim(),
-      time: new Date().toISOString(),
-      resolved: false,
-    };
-    updateEvent(selectedEvent.id, (ev) => ({
-      ...ev,
-      issues: [issue, ...ev.issues],
-    }));
-    setIssueText("");
-  }
-
-  function handleIssueToggle(eventId: number, issueId: number) {
-    updateEvent(eventId, (ev) => ({
-      ...ev,
-      issues: ev.issues.map((i) =>
-        i.id === issueId ? { ...i, resolved: !i.resolved } : i
-      ),
-    }));
-  }
-
-  function handleMoodboardAdd() {
-    if (!selectedEvent) return;
-    const url = prompt(
-      "Paste image URL or short note for moodboard (stage, mandap, color palette etc.)"
-    );
-    if (!url) return;
-    updateEvent(selectedEvent.id, (ev) => ({
-      ...ev,
-      moodboard: [url, ...ev.moodboard],
-    }));
-  }
-
-  function handleVenueLayoutChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
-    if (!selectedEvent) return;
-    const value = e.target.value;
-    updateEvent(selectedEvent.id, (ev) => ({
-      ...ev,
-      venueLayoutNotes: value,
-    }));
-  }
-
-  function computeCriticalPath(ev: EventuraEvent) {
-    const now = new Date();
-    const overdueCritical = ev.tasks.filter(
-      (t) =>
-        t.critical &&
-        !t.done &&
-        new Date(t.dueDate).getTime() < now.getTime()
-    );
-    const delayRisk = overdueCritical.length > 0;
-    return { delayRisk, overdueCritical };
-  }
-
-  function computeFinance(ev: EventuraEvent) {
-    const revenue = ev.revenue;
-    const variable = ev.variableCost;
-    const fixed = ev.fixedCost;
-    const totalCost = variable + fixed;
-    const profit = revenue - totalCost;
-    const marginPct = revenue > 0 ? (profit / revenue) * 100 : 0;
-    return { revenue, variable, fixed, totalCost, profit, marginPct };
-  }
-
-  function computeEventScore(ev: EventuraEvent) {
-    const finance = computeFinance(ev);
-    const vendorAvg =
-      ev.vendorScores.length > 0
-        ? ev.vendorScores.reduce((s, v) => s + v.score, 0) /
-          ev.vendorScores.length
-        : 70;
-    const issuePenalty = ev.issues.filter((i) => !i.resolved).length * 3;
-    const base = Math.min(Math.max(finance.marginPct, 0), 40); // max 40 points
-    const vendorPart = (vendorAvg / 100) * 30; // 30 points
-    const clientPart = (ev.clientScore ?? 8) * 3; // up to 30
-    let score = base + vendorPart + clientPart - issuePenalty;
-    if (ev.blacklistFlag) score -= 15;
-    return Math.max(0, Math.min(100, Math.round(score)));
-  }
+  const selectedEvent = events.find((ev) => ev.id === selectedId) ?? null;
 
   if (!user) return null;
 
@@ -393,126 +308,36 @@ export default function EventsPage() {
         <TopbarCore user={user} />
 
         <div className="eventura-content">
+          {/* Header row */}
           <div className="eventura-header-row">
             <div>
               <h1 className="eventura-page-title">Events</h1>
               <p className="eventura-subtitle">
-                Plan, execute and analyse every event — with automatic timelines,
-                Gantt-style view, P&L and on-ground tracking.
+                Plan, track and analyse every Eventura project end-to-end.
               </p>
             </div>
-            <button
-              className="eventura-button"
-              onClick={() => {
-                const top = document.getElementById("event-form");
-                if (top) top.scrollIntoView({ behavior: "smooth" });
-              }}
-            >
-              + New Event
-            </button>
+            <div className="eventura-actions">
+              <button
+                className="eventura-button"
+                type="button"
+                onClick={resetForm}
+              >
+                + New Event
+              </button>
+            </div>
           </div>
 
-          {/* MAIN GRID: LEFT = LIST + FORM, RIGHT = DETAIL */}
-          <section className="events-grid">
-            {/* LEFT SIDE – list + create form */}
-            <div className="eventura-panel">
-              <h2 className="eventura-panel-title">Event list</h2>
-              {events.length === 0 ? (
-                <p className="eventura-small-text">
-                  No events yet. Create your first event using the form below.
-                </p>
-              ) : (
-                <div className="eventura-table-wrapper">
-                  <table className="eventura-table events-table">
-                    <thead>
-                      <tr>
-                        <th>Client & Event</th>
-                        <th>Date & City</th>
-                        <th>Budget</th>
-                        <th>Status</th>
-                        <th>Margin</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {events.map((ev) => {
-                        const finance = computeFinance(ev);
-                        const margin = finance.marginPct;
-                        const risk = computeCriticalPath(ev).delayRisk;
-                        return (
-                          <tr
-                            key={ev.id}
-                            className={
-                              "events-row" +
-                              (selectedId === ev.id ? " events-row-active" : "")
-                            }
-                            onClick={() => setSelectedId(ev.id)}
-                          >
-                            <td>
-                              <div className="events-client">
-                                <div className="events-main-text">
-                                  {ev.clientName} – {ev.name}
-                                </div>
-                                <div className="events-sub-text">
-                                  {ev.type} · {ev.guestCount} guests
-                                </div>
-                              </div>
-                            </td>
-                            <td>
-                              <div className="events-sub-text">
-                                {ev.date} · {ev.city}
-                              </div>
-                            </td>
-                            <td>{formatCurrency(ev.revenue)}</td>
-                            <td>
-                              <span className={`events-status events-status-${ev.status.toLowerCase().replace(" ", "")}`}>
-                                {ev.status}
-                              </span>
-                              {risk && (
-                                <span className="events-delay-tag">
-                                  ⚠ Delay risk
-                                </span>
-                              )}
-                            </td>
-                            <td
-                              style={{
-                                color:
-                                  margin >= 25
-                                    ? "#4ade80"
-                                    : margin >= 15
-                                    ? "#facc15"
-                                    : "#f97373",
-                              }}
-                            >
-                              {margin.toFixed(1)}%
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-
-              {/* Create form */}
-              <div id="event-form" style={{ marginTop: "1rem" }}>
-                <h3 className="eventura-panel-title">
-                  Create new event (smart planner)
-                </h3>
-                <form className="eventura-form" onSubmit={handleCreateEvent}>
+          {/* Form + List + Detail */}
+          <div className="eventura-columns">
+            {/* LEFT SIDE: form + list */}
+            <div>
+              {/* Form */}
+              <div className="eventura-panel">
+                <h2 className="eventura-panel-title">
+                  {editingId ? "Edit event" : "Create new event"}
+                </h2>
+                <form className="eventura-form" onSubmit={handleSubmit}>
                   <div className="eventura-form-grid">
-                    <div className="eventura-field">
-                      <label className="eventura-label" htmlFor="name">
-                        Event name
-                      </label>
-                      <input
-                        id="name"
-                        name="name"
-                        className="eventura-input"
-                        value={form.name}
-                        onChange={handleFormChange}
-                        placeholder="e.g. Patel Wedding Reception"
-                      />
-                    </div>
                     <div className="eventura-field">
                       <label className="eventura-label" htmlFor="clientName">
                         Client name
@@ -527,14 +352,30 @@ export default function EventsPage() {
                       />
                     </div>
                     <div className="eventura-field">
-                      <label className="eventura-label" htmlFor="type">
+                      <label className="eventura-label" htmlFor="eventName">
+                        Event name
+                      </label>
+                      <input
+                        id="eventName"
+                        name="eventName"
+                        className="eventura-input"
+                        value={form.eventName}
+                        onChange={handleFormChange}
+                        placeholder="e.g. Patel Wedding Sangeet"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="eventura-form-grid">
+                    <div className="eventura-field">
+                      <label className="eventura-label" htmlFor="eventType">
                         Event type
                       </label>
                       <select
-                        id="type"
-                        name="type"
+                        id="eventType"
+                        name="eventType"
                         className="eventura-input"
-                        value={form.type}
+                        value={form.eventType}
                         onChange={handleFormChange}
                       >
                         <option>Wedding</option>
@@ -545,18 +386,29 @@ export default function EventsPage() {
                       </select>
                     </div>
                     <div className="eventura-field">
-                      <label className="eventura-label" htmlFor="city">
-                        City
+                      <label className="eventura-label" htmlFor="status">
+                        Status
                       </label>
-                      <input
-                        id="city"
-                        name="city"
+                      <select
+                        id="status"
+                        name="status"
                         className="eventura-input"
-                        value={form.city}
+                        value={form.status}
                         onChange={handleFormChange}
-                        placeholder="e.g. Surat"
-                      />
+                      >
+                        <option>New Lead</option>
+                        <option>Proposal Sent</option>
+                        <option>Negotiation</option>
+                        <option>Confirmed</option>
+                        <option>Planning</option>
+                        <option>In Execution</option>
+                        <option>Completed</option>
+                        <option>Cancelled</option>
+                      </select>
                     </div>
+                  </div>
+
+                  <div className="eventura-form-grid">
                     <div className="eventura-field">
                       <label className="eventura-label" htmlFor="date">
                         Event date
@@ -571,18 +423,50 @@ export default function EventsPage() {
                       />
                     </div>
                     <div className="eventura-field">
-                      <label className="eventura-label" htmlFor="guestCount">
-                        Guest count
+                      <label className="eventura-label" htmlFor="city">
+                        City
                       </label>
                       <input
-                        id="guestCount"
-                        name="guestCount"
+                        id="city"
+                        name="city"
                         className="eventura-input"
-                        value={form.guestCount}
+                        value={form.city}
+                        onChange={handleFormChange}
+                        placeholder="Surat / Ahmedabad / Rajkot"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="eventura-form-grid">
+                    <div className="eventura-field">
+                      <label className="eventura-label" htmlFor="venue">
+                        Venue
+                      </label>
+                      <input
+                        id="venue"
+                        name="venue"
+                        className="eventura-input"
+                        value={form.venue}
+                        onChange={handleFormChange}
+                        placeholder="e.g. Laxmi Farm"
+                      />
+                    </div>
+                    <div className="eventura-field">
+                      <label className="eventura-label" htmlFor="guests">
+                        Guests (approx)
+                      </label>
+                      <input
+                        id="guests"
+                        name="guests"
+                        className="eventura-input"
+                        value={form.guests}
                         onChange={handleFormChange}
                         placeholder="e.g. 450"
                       />
                     </div>
+                  </div>
+
+                  <div className="eventura-form-grid">
                     <div className="eventura-field">
                       <label className="eventura-label" htmlFor="budget">
                         Budget / expected revenue (₹)
@@ -596,442 +480,678 @@ export default function EventsPage() {
                         placeholder="e.g. 18,50,000"
                       />
                     </div>
+                    <div className="eventura-field">
+                      <label className="eventura-label" htmlFor="leadSource">
+                        Lead source
+                      </label>
+                      <input
+                        id="leadSource"
+                        name="leadSource"
+                        className="eventura-input"
+                        value={form.leadSource}
+                        onChange={handleFormChange}
+                        placeholder="Instagram / Referral / Venue / Google"
+                      />
+                    </div>
                   </div>
-                  <div className="eventura-actions" style={{ marginTop: "0.75rem" }}>
+
+                  <div className="eventura-form-grid">
+                    <div className="eventura-field">
+                      <label className="eventura-label" htmlFor="owner">
+                        Owner / manager
+                      </label>
+                      <input
+                        id="owner"
+                        name="owner"
+                        className="eventura-input"
+                        value={form.owner}
+                        onChange={handleFormChange}
+                        placeholder="Hardik / Shubh / Dixit"
+                      />
+                    </div>
+                  </div>
+
+                  <div
+                    className="eventura-field"
+                    style={{ marginTop: "0.7rem" }}
+                  >
+                    <label className="eventura-label" htmlFor="notes">
+                      Notes
+                    </label>
+                    <textarea
+                      id="notes"
+                      name="notes"
+                      className="eventura-textarea"
+                      value={form.notes}
+                      onChange={handleFormChange}
+                      placeholder="Client preferences, colour palette, must-have elements..."
+                    />
+                  </div>
+
+                  <div className="eventura-actions">
                     <button type="submit" className="eventura-button">
-                      Create event with auto timeline
+                      {editingId ? "Update event" : "Save event"}
                     </button>
+                    {editingId && (
+                      <button
+                        type="button"
+                        className="eventura-button-secondary"
+                        onClick={resetForm}
+                      >
+                        Cancel edit
+                      </button>
+                    )}
                   </div>
                 </form>
               </div>
+
+              {/* List */}
+              <div className="eventura-panel" style={{ marginTop: "1rem" }}>
+                <h2 className="eventura-panel-title">Event list</h2>
+                <div
+                  className="eventura-form-grid"
+                  style={{ marginBottom: "0.6rem" }}
+                >
+                  <div className="eventura-field">
+                    <input
+                      className="eventura-input"
+                      placeholder="Search by client, event or city..."
+                      value={search}
+                      onChange={(e) => setSearch(e.target.value)}
+                    />
+                  </div>
+                  <div className="eventura-field">
+                    <select
+                      className="eventura-input"
+                      value={statusFilter}
+                      onChange={(e) =>
+                        setStatusFilter(
+                          e.target.value as EventStatus | "All"
+                        )
+                      }
+                    >
+                      <option value="All">All statuses</option>
+                      <option value="New Lead">New Lead</option>
+                      <option value="Proposal Sent">Proposal Sent</option>
+                      <option value="Negotiation">Negotiation</option>
+                      <option value="Confirmed">Confirmed</option>
+                      <option value="Planning">Planning</option>
+                      <option value="In Execution">In Execution</option>
+                      <option value="Completed">Completed</option>
+                      <option value="Cancelled">Cancelled</option>
+                    </select>
+                  </div>
+                </div>
+
+                {filteredEvents.length === 0 ? (
+                  <p
+                    style={{
+                      fontSize: "0.8rem",
+                      color: "#9ca3af",
+                      marginTop: "0.4rem",
+                    }}
+                  >
+                    No events match this filter.
+                  </p>
+                ) : (
+                  <ul className="eventura-list">
+                    {filteredEvents.map((ev) => (
+                      <li
+                        key={ev.id}
+                        className="eventura-list-item"
+                        style={{
+                          cursor: "pointer",
+                          backgroundColor:
+                            ev.id === selectedId
+                              ? "rgba(15,23,42,0.8)"
+                              : "transparent",
+                          borderRadius: "0.7rem",
+                          padding: "0.5rem 0.55rem",
+                        }}
+                        onClick={() => setSelectedId(ev.id)}
+                      >
+                        <div>
+                          <div className="eventura-list-title">
+                            {ev.eventName}
+                          </div>
+                          <div className="eventura-list-sub">
+                            {ev.clientName} · {ev.city} ·{" "}
+                            {ev.date || "No date"} · {ev.eventType}
+                          </div>
+                        </div>
+                        <div style={{ display: "flex", gap: "0.3rem" }}>
+                          <button
+                            type="button"
+                            className="eventura-tag eventura-tag-blue"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleEdit(ev.id);
+                            }}
+                          >
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            className="eventura-tag eventura-tag-amber"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDelete(ev.id);
+                            }}
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
             </div>
 
-            {/* RIGHT SIDE – detail view */}
+            {/* RIGHT SIDE: detail & smart features */}
             <div className="eventura-panel">
               {!selectedEvent ? (
-                <p className="eventura-small-text">
-                  Select an event from the left to see timeline, Gantt view,
-                  P&L and operations.
+                <p style={{ fontSize: "0.8rem", color: "#9ca3af" }}>
+                  Select an event from the list to see its smart planning,
+                  vendors, P&amp;L and issues.
                 </p>
               ) : (
                 <EventDetail
-                  ev={selectedEvent}
+                  event={selectedEvent}
                   isCEO={isCEO}
-                  onStatusChange={handleStatusChange}
-                  onTaskToggle={handleTaskToggle}
-                  onPaymentStatusChange={handlePaymentStatusChange}
-                  onBlacklistToggle={handleBlacklistToggle}
-                  onIssueAdd={handleIssueAdd}
-                  onIssueToggle={handleIssueToggle}
-                  issueText={issueText}
-                  setIssueText={setIssueText}
-                  onMoodboardAdd={handleMoodboardAdd}
-                  onVenueLayoutChange={handleVenueLayoutChange}
-                  computeCriticalPath={computeCriticalPath}
-                  computeFinance={computeFinance}
-                  computeEventScore={computeEventScore}
+                  onUpdate={handleUpdateEvent}
                 />
               )}
             </div>
-          </section>
+          </div>
         </div>
       </div>
     </main>
   );
 }
 
-/* ========== DETAIL COMPONENT ========== */
+/* ========== Event Detail & Smart Features ========== */
 
-function EventDetail(props: {
-  ev: EventuraEvent;
+function EventDetail({
+  event,
+  isCEO,
+  onUpdate,
+}: {
+  event: EventItem;
   isCEO: boolean;
-  onStatusChange: (id: number, status: EventStatus) => void;
-  onTaskToggle: (eventId: number, taskId: number) => void;
-  onPaymentStatusChange: (
-    eventId: number,
-    idx: number,
-    status: PaymentStage["status"]
-  ) => void;
-  onBlacklistToggle: (eventId: number) => void;
-  onIssueAdd: () => void;
-  onIssueToggle: (eventId: number, issueId: number) => void;
-  issueText: string;
-  setIssueText: (v: string) => void;
-  onMoodboardAdd: () => void;
-  onVenueLayoutChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => void;
-  computeCriticalPath: (
-    ev: EventuraEvent
-  ) => { delayRisk: boolean; overdueCritical: EventTask[] };
-  computeFinance: (
-    ev: EventuraEvent
-  ) => {
-    revenue: number;
-    variable: number;
-    fixed: number;
-    totalCost: number;
-    profit: number;
-    marginPct: number;
-  };
-  computeEventScore: (ev: EventuraEvent) => number;
+  onUpdate: (e: EventItem) => void;
 }) {
-  const {
-    ev,
-    isCEO,
-    onStatusChange,
-    onTaskToggle,
-    onPaymentStatusChange,
-    onBlacklistToggle,
-    onIssueAdd,
-    onIssueToggle,
-    issueText,
-    setIssueText,
-    onMoodboardAdd,
-    onVenueLayoutChange,
-    computeCriticalPath,
-    computeFinance,
-    computeEventScore,
-  } = props;
+  const eventDate = event.date ? new Date(event.date) : null;
+  const today = new Date();
+  const daysToEvent =
+    eventDate != null
+      ? Math.round(
+          (eventDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24)
+        )
+      : null;
 
-  const critical = computeCriticalPath(ev);
-  const finance = computeFinance(ev);
-  const score = computeEventScore(ev);
+  const guests = parseInt(event.guests || "0", 10) || 0;
+  const basePerHead =
+    event.eventType === "Wedding"
+      ? 3500
+      : event.eventType === "Corporate"
+      ? 2800
+      : 2200;
+  const suggestedBudget = guests > 0 ? guests * basePerHead : 0;
+  const currentBudget = parseMoney(event.budget || "0");
+  const budgetGap = currentBudget > 0 ? currentBudget - suggestedBudget : 0;
 
-  const eventDate = new Date(ev.date + "T00:00:00");
+  const vendorTotal = (event.vendors ?? []).reduce(
+    (sum, v) => sum + parseMoney(v.amount),
+    0
+  );
+
+  const revenue = currentBudget || suggestedBudget;
+  const variableCost = vendorTotal || revenue * 0.7;
+  const profit = revenue - variableCost;
+  const margin = revenue > 0 ? (profit / revenue) * 100 : 0;
+
+  const riskStatus =
+    daysToEvent != null &&
+    daysToEvent <= 7 &&
+    (event.status === "New Lead" ||
+      event.status === "Proposal Sent" ||
+      event.status === "Negotiation")
+      ? "HIGH"
+      : "NORMAL";
+
+  const timeline = buildTimeline(eventDate);
+
+  // local add-forms for vendors & issues
+  const [vendorDraft, setVendorDraft] = useState({
+    name: "",
+    category: "",
+    amount: "",
+    status: "Planned" as VendorStatus,
+  });
+  const [issueDraft, setIssueDraft] = useState("");
+
+  function updateVendors(next: VendorAssignment[]) {
+    onUpdate({
+      ...event,
+      vendors: next,
+    });
+  }
+
+  function updateIssues(next: IssueItem[]) {
+    onUpdate({
+      ...event,
+      issues: next,
+    });
+  }
+
+  function handleAddVendor(e: React.FormEvent) {
+    e.preventDefault();
+    if (!vendorDraft.name || !vendorDraft.category || !vendorDraft.amount) {
+      alert("Vendor name, category and amount are required.");
+      return;
+    }
+    const next: VendorAssignment[] = [
+      ...(event.vendors ?? []),
+      {
+        id: Date.now(),
+        ...vendorDraft,
+      },
+    ];
+    updateVendors(next);
+    setVendorDraft({
+      name: "",
+      category: "",
+      amount: "",
+      status: "Planned",
+    });
+  }
+
+  function handleDeleteVendor(id: number) {
+    const next = (event.vendors ?? []).filter((v) => v.id !== id);
+    updateVendors(next);
+  }
+
+  function handleVendorStatusChange(id: number, status: VendorStatus) {
+    const next = (event.vendors ?? []).map((v) =>
+      v.id === id ? { ...v, status } : v
+    );
+    updateVendors(next);
+  }
+
+  function handleAddIssue(e: React.FormEvent) {
+    e.preventDefault();
+    if (!issueDraft.trim()) return;
+    const next: IssueItem[] = [
+      ...(event.issues ?? []),
+      {
+        id: Date.now(),
+        text: issueDraft.trim(),
+        status: "Open",
+        createdAt: new Date().toISOString(),
+      },
+    ];
+    updateIssues(next);
+    setIssueDraft("");
+  }
+
+  function handleToggleIssue(id: number) {
+    const next = (event.issues ?? []).map((iss) =>
+      iss.id === id
+        ? {
+            ...iss,
+            status: iss.status === "Open" ? "Resolved" : "Open",
+          }
+        : iss
+    );
+    updateIssues(next);
+  }
 
   return (
-    <div className="event-detail">
-      <div className="event-detail-header">
+    <div className="eventura-event-detail">
+      <div className="eventura-header-row">
         <div>
-          <h2 className="eventura-panel-title">
-            {ev.clientName} – {ev.name}
-          </h2>
-          <p className="eventura-small-text">
-            {ev.type} · {ev.date} · {ev.city} · {ev.guestCount} guests
+          <h2 className="eventura-panel-title">{event.eventName}</h2>
+          <p className="eventura-subtitle">
+            {event.clientName} · {event.city} · {event.eventType}
           </p>
         </div>
-        <div className="event-detail-status">
-          <select
-            className="eventura-input event-status-select"
-            value={ev.status}
-            onChange={(e) =>
-              onStatusChange(ev.id, e.target.value as EventStatus)
-            }
-          >
-            <option>Planning</option>
-            <option>In Execution</option>
-            <option>Completed</option>
-            <option>Cancelled</option>
-          </select>
-          {critical.delayRisk && (
-            <span className="events-delay-tag">⚠ Delay risk</span>
+        <div style={{ textAlign: "right", fontSize: "0.72rem" }}>
+          <div className="eventura-tag eventura-tag-blue">
+            Status: {event.status}
+          </div>
+          {daysToEvent != null && (
+            <div style={{ marginTop: "0.2rem", color: "#9ca3af" }}>
+              {daysToEvent >= 0
+                ? `Event in ${daysToEvent} day(s)`
+                : `Event was ${Math.abs(daysToEvent)} day(s) ago`}
+            </div>
+          )}
+          {riskStatus === "HIGH" && (
+            <div
+              className="eventura-tag eventura-tag-amber"
+              style={{ marginTop: "0.2rem" }}
+            >
+              ⚠ Delay Risk – close date, early pipeline
+            </div>
           )}
         </div>
       </div>
 
-      {/* GRID: Timeline / Gantt / Finance / Ops */}
-      <div className="event-detail-grid">
-        {/* TIMELINE + GANTT */}
+      {/* GRID: timeline + budget/P&L */}
+      <div className="eventura-columns" style={{ marginTop: "0.8rem" }}>
+        {/* Timeline / planning */}
         <div>
-          <h3 className="eventura-section-title">
-            Smart timeline & Gantt view
-          </h3>
+          <h3 className="eventura-panel-title">Smart timeline</h3>
           <p className="eventura-small-text">
-            Auto-generated timeline from event date. Tick tasks as they are
-            completed — critical ones affect delay risk.
+            Auto-generated from event date. Changes automatically if you update
+            the date in the event form.
           </p>
-
-          <ul className="timeline-list">
-            {ev.tasks.map((t) => {
-              const d = new Date(t.dueDate);
-              const overdue =
-                !t.done && d.getTime() < new Date().getTime() && t.critical;
-              return (
-                <li key={t.id} className="timeline-item">
-                  <label className="timeline-label">
-                    <input
-                      type="checkbox"
-                      checked={t.done}
-                      onChange={() => onTaskToggle(ev.id, t.id)}
-                    />
-                    <span>{t.label}</span>
-                  </label>
-                  <div className="timeline-meta">
-                    <span>{formatShort(d)}</span>
-                    {t.critical && (
-                      <span className="timeline-tag timeline-tag-critical">
-                        Critical
-                      </span>
-                    )}
-                    {overdue && (
-                      <span className="timeline-tag timeline-tag-overdue">
-                        Overdue
-                      </span>
-                    )}
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
-
-          <div className="gantt-wrapper">
-            <div className="gantt-axis">
-              <span>{formatShort(addDays(eventDate, -60))}</span>
-              <span>{formatShort(eventDate)}</span>
-              <span>{formatShort(addDays(eventDate, 7))}</span>
-            </div>
-            {ev.tasks.map((t) => {
-              const start = new Date(t.dueDate);
-              const diffDays = Math.round(
-                (start.getTime() - addDays(eventDate, -60).getTime()) /
-                  (1000 * 60 * 60 * 24)
-              );
-              const total = 67; // -60 to +7 days
-              const leftPct = Math.max(0, Math.min(100, (diffDays / total) * 100));
-              return (
-                <div key={t.id} className="gantt-row">
-                  <span className="gantt-label">{t.label}</span>
-                  <div className="gantt-bar-track">
-                    <div
-                      className={
-                        "gantt-bar" +
-                        (t.done ? " gantt-bar-done" : "") +
-                        (t.critical ? " gantt-bar-critical" : "")
-                      }
-                      style={{ left: `${leftPct}%` }}
-                    />
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* FINANCE & P&L */}
-        <div>
-          <h3 className="eventura-section-title">Per-event P&L</h3>
-          <p className="eventura-small-text">
-            Real-time profitability of this event. For deep accounting, use the
-            Finance module and your external books.
-          </p>
-          <div className="event-finance-cards">
-            <div className="event-fin-card">
-              <div className="event-fin-label">Revenue</div>
-              <div className="event-fin-value">
-                {formatCurrency(finance.revenue)}
-              </div>
-            </div>
-            <div className="event-fin-card">
-              <div className="event-fin-label">Variable cost</div>
-              <div className="event-fin-value">
-                {formatCurrency(finance.variable)}
-              </div>
-            </div>
-            <div className="event-fin-card">
-              <div className="event-fin-label">Fixed cost</div>
-              <div className="event-fin-value">
-                {formatCurrency(finance.fixed)}
-              </div>
-            </div>
-            <div className="event-fin-card">
-              <div className="event-fin-label">Profit</div>
-              <div className="event-fin-value">
-                {formatCurrency(finance.profit)}
-              </div>
-              <div className="event-fin-sub">
-                Margin {finance.marginPct.toFixed(1)}%
-              </div>
-            </div>
-          </div>
-
-          <h4 className="eventura-section-subtitle">Client payment timeline</h4>
-          <ul className="payment-list">
-            {ev.paymentPlan.map((p, idx) => (
-              <li key={idx} className="payment-item">
+          <ul className="eventura-list" style={{ marginTop: "0.4rem" }}>
+            {timeline.map((t) => (
+              <li key={t.label} className="eventura-list-item">
                 <div>
-                  <div className="payment-label">{p.label}</div>
-                  <div className="payment-sub">
-                    {p.duePercent}% of total ·{" "}
-                    {formatCurrency(
-                      Math.round((p.duePercent / 100) * finance.revenue)
-                    )}
+                  <div className="eventura-list-title">{t.label}</div>
+                  <div className="eventura-list-sub">
+                    Target: {t.displayDate}
                   </div>
                 </div>
-                <select
-                  className="eventura-input payment-status"
-                  value={p.status}
-                  onChange={(e) =>
-                    onPaymentStatusChange(
-                      ev.id,
-                      idx,
-                      e.target.value as PaymentStage["status"]
-                    )
+                <span
+                  className={
+                    "eventura-tag " +
+                    (t.isPast ? "eventura-tag-amber" : "eventura-tag-green")
                   }
                 >
-                  <option>Pending</option>
-                  <option>Paid</option>
-                  <option>Overdue</option>
-                </select>
+                  {t.isPast ? "Check" : "Upcoming"}
+                </span>
               </li>
             ))}
           </ul>
+        </div>
+
+        {/* Budget & event P&L */}
+        <div>
+          <h3 className="eventura-panel-title">Budget & event P&amp;L</h3>
+          <p className="eventura-small-text">
+            Uses your quoted budget and vendor payouts as real-time P&amp;L for
+            this event.
+          </p>
+
+          <div className="eventura-kpi-row" style={{ marginTop: "0.5rem" }}>
+            <div className="eventura-card">
+              <div className="eventura-card-label">Guests</div>
+              <div className="eventura-card-value">{guests || "–"}</div>
+              <div className="eventura-card-note">
+                Type: {event.eventType}
+              </div>
+            </div>
+
+            <div className="eventura-card">
+              <div className="eventura-card-label">Suggested budget</div>
+              <div className="eventura-card-value">
+                ₹{formatCurrency(suggestedBudget)}
+              </div>
+              <div className="eventura-card-note">
+                ~₹{formatCurrency(basePerHead)} / guest
+              </div>
+            </div>
+          </div>
+
+          <div className="eventura-kpi-row" style={{ marginTop: "0.5rem" }}>
+            <div className="eventura-card">
+              <div className="eventura-card-label">Quoted revenue</div>
+              <div className="eventura-card-value">
+                ₹{formatCurrency(currentBudget)}
+              </div>
+              <div className="eventura-card-note">
+                Gap vs suggested:{" "}
+                {budgetGap === 0
+                  ? "aligned"
+                  : budgetGap > 0
+                  ? `+₹${formatCurrency(budgetGap)}`
+                  : `-₹${formatCurrency(Math.abs(budgetGap))}`}
+              </div>
+            </div>
+            <div className="eventura-card">
+              <div className="eventura-card-label">Vendor payouts</div>
+              <div className="eventura-card-value">
+                ₹{formatCurrency(vendorTotal)}
+              </div>
+              <div className="eventura-card-note">
+                Used in profit calculation
+              </div>
+            </div>
+          </div>
 
           {isCEO && (
-            <div className="event-blacklist-row">
-              <label>
-                <input
-                  type="checkbox"
-                  checked={ev.blacklistFlag}
-                  onChange={() => onBlacklistToggle(ev.id)}
-                />{" "}
-                Suggest vendor blacklist for repeated issues
-              </label>
+            <div className="eventura-kpi-row" style={{ marginTop: "0.5rem" }}>
+              <div className="eventura-card">
+                <div className="eventura-card-label">Estimated margin</div>
+                <div className="eventura-card-value">
+                  {margin ? margin.toFixed(1) : "–"}%
+                </div>
+                <div className="eventura-card-note">
+                  Profit approx: ₹{formatCurrency(profit || 0)}
+                </div>
+              </div>
             </div>
           )}
         </div>
       </div>
 
-      {/* MOODBOARD + VENUE + VENDORS + OPS */}
-      <div className="event-detail-grid event-detail-grid-bottom">
-        {/* Moodboard & venue layout */}
-        <div>
-          <h3 className="eventura-section-title">Moodboard & layout</h3>
-          <p className="eventura-small-text">
-            Save references for mandap, stage, lighting and layout. Use URLs or
-            short labels.
-          </p>
-
-          <button
-            type="button"
-            className="eventura-button-secondary"
-            onClick={onMoodboardAdd}
-          >
-            + Add moodboard item
-          </button>
-
-          {ev.moodboard.length === 0 ? (
-            <p className="eventura-small-text" style={{ marginTop: "0.5rem" }}>
-              No moodboard items yet.
-            </p>
-          ) : (
-            <ul className="moodboard-list">
-              {ev.moodboard.map((m, idx) => (
-                <li key={idx} className="moodboard-item">
-                  {m}
-                </li>
-              ))}
-            </ul>
-          )}
-
-          <h4 className="eventura-section-subtitle" style={{ marginTop: "0.75rem" }}>
-            Venue layout notes (mini CAD)
-          </h4>
-          <textarea
-            className="eventura-textarea"
-            value={ev.venueLayoutNotes}
-            onChange={onVenueLayoutChange}
-            placeholder="Example: Stage on north side, 50 tables of 8, buffet near south wall, DJ near stage left, VIP sofa cluster near main entry..."
-          />
-        </div>
-
-        {/* Vendors & operations */}
-        <div>
-          <h3 className="eventura-section-title">
-            Vendors, issues & event scorecard
+      {/* VENDORS + ISSUES */}
+      <div
+        className="eventura-columns"
+        style={{
+          marginTop: "1rem",
+          gridTemplateColumns: "minmax(0,1.1fr) minmax(0,1fr)",
+        }}
+      >
+        {/* Vendors */}
+        <div className="eventura-panel" style={{ background: "transparent" }}>
+          <h3 className="eventura-panel-title">
+            Vendors & payouts (linked to Finance thinking)
           </h3>
           <p className="eventura-small-text">
-            Track vendor performance, on-ground issues and overall event score.
+            Track decorators, caterers, photographers, etc. Their total is used
+            as variable cost in this event P&amp;L.
           </p>
 
-          <div className="vendor-score-grid">
-            {ev.vendorScores.map((v, idx) => (
-              <div key={idx} className="vendor-score-card">
-                <div className="vendor-name">{v.vendorName}</div>
-                <div className="vendor-category">{v.category}</div>
-                <div className="vendor-score">
-                  Score:{" "}
-                  <span
-                    style={{
-                      color:
-                        v.score >= 80
-                          ? "#4ade80"
-                          : v.score >= 60
-                          ? "#facc15"
-                          : "#f97373",
-                    }}
-                  >
-                    {v.score}/100
-                  </span>
-                </div>
-                {v.notes && (
-                  <div className="vendor-notes">“{v.notes}”</div>
-                )}
+          <form
+            className="eventura-form"
+            onSubmit={handleAddVendor}
+            style={{ marginTop: "0.5rem" }}
+          >
+            <div className="eventura-form-grid">
+              <div className="eventura-field">
+                <input
+                  className="eventura-input"
+                  placeholder="Vendor name"
+                  value={vendorDraft.name}
+                  onChange={(e) =>
+                    setVendorDraft((prev) => ({
+                      ...prev,
+                      name: e.target.value,
+                    }))
+                  }
+                />
               </div>
-            ))}
-          </div>
+              <div className="eventura-field">
+                <input
+                  className="eventura-input"
+                  placeholder="Category (Decor / Catering / Photo)"
+                  value={vendorDraft.category}
+                  onChange={(e) =>
+                    setVendorDraft((prev) => ({
+                      ...prev,
+                      category: e.target.value,
+                    }))
+                  }
+                />
+              </div>
+            </div>
+            <div className="eventura-form-grid" style={{ marginTop: "0.4rem" }}>
+              <div className="eventura-field">
+                <input
+                  className="eventura-input"
+                  placeholder="Amount (₹)"
+                  value={vendorDraft.amount}
+                  onChange={(e) =>
+                    setVendorDraft((prev) => ({
+                      ...prev,
+                      amount: e.target.value,
+                    }))
+                  }
+                />
+              </div>
+              <div className="eventura-field">
+                <select
+                  className="eventura-input"
+                  value={vendorDraft.status}
+                  onChange={(e) =>
+                    setVendorDraft((prev) => ({
+                      ...prev,
+                      status: e.target.value as VendorStatus,
+                    }))
+                  }
+                >
+                  <option>Planned</option>
+                  <option>Advance Paid</option>
+                  <option>Paid</option>
+                  <option>Cancelled</option>
+                </select>
+              </div>
+            </div>
+            <div className="eventura-actions" style={{ marginTop: "0.4rem" }}>
+              <button type="submit" className="eventura-button-secondary">
+                + Add vendor
+              </button>
+            </div>
+          </form>
 
-          <h4 className="eventura-section-subtitle" style={{ marginTop: "0.8rem" }}>
-            Live issues (event day)
-          </h4>
-          <div className="issue-input-row">
+          <div className="eventura-table-wrapper" style={{ marginTop: "0.6rem" }}>
+            {(event.vendors ?? []).length === 0 ? (
+              <p
+                style={{
+                  fontSize: "0.8rem",
+                  color: "#9ca3af",
+                }}
+              >
+                No vendors added yet. Add decorator, caterer, photographer, etc.
+              </p>
+            ) : (
+              <table className="eventura-table">
+                <thead>
+                  <tr>
+                    <th>Vendor</th>
+                    <th>Category</th>
+                    <th>Amount (₹)</th>
+                    <th>Status</th>
+                    <th />
+                  </tr>
+                </thead>
+                <tbody>
+                  {(event.vendors ?? []).map((v) => (
+                    <tr key={v.id}>
+                      <td>{v.name}</td>
+                      <td>{v.category}</td>
+                      <td>{v.amount}</td>
+                      <td>
+                        <select
+                          className="eventura-input"
+                          value={v.status}
+                          onChange={(e) =>
+                            handleVendorStatusChange(
+                              v.id,
+                              e.target.value as VendorStatus
+                            )
+                          }
+                        >
+                          <option>Planned</option>
+                          <option>Advance Paid</option>
+                          <option>Paid</option>
+                          <option>Cancelled</option>
+                        </select>
+                      </td>
+                      <td>
+                        <button
+                          type="button"
+                          className="eventura-tag eventura-tag-amber"
+                          onClick={() => handleDeleteVendor(v.id)}
+                        >
+                          Remove
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+
+        {/* Issues */}
+        <div className="eventura-panel" style={{ background: "transparent" }}>
+          <h3 className="eventura-panel-title">
+            Issues & on-ground alerts
+          </h3>
+          <p className="eventura-small-text">
+            Ground staff can note problems like delays, shortages, vendor issues.
+          </p>
+
+          <form
+            onSubmit={handleAddIssue}
+            style={{ marginTop: "0.5rem", display: "flex", gap: "0.4rem" }}
+          >
             <input
               className="eventura-input"
-              placeholder='e.g. "Flower shortage at entrance", "DJ delayed"'
-              value={issueText}
-              onChange={(e) => setIssueText(e.target.value)}
+              placeholder='e.g. "Flower shortage on stage", "DJ late by 30 min"'
+              value={issueDraft}
+              onChange={(e) => setIssueDraft(e.target.value)}
             />
-            <button
-              type="button"
-              className="eventura-button-secondary"
-              onClick={onIssueAdd}
-            >
-              + Add issue
+            <button type="submit" className="eventura-button-secondary">
+              + Add
             </button>
-          </div>
-          {ev.issues.length === 0 ? (
-            <p className="eventura-small-text" style={{ marginTop: "0.4rem" }}>
-              No issues logged yet.
-            </p>
-          ) : (
-            <ul className="issue-list">
-              {ev.issues.map((i) => (
-                <li key={i.id} className="issue-item">
+          </form>
+
+          <ul className="eventura-list" style={{ marginTop: "0.6rem" }}>
+            {(event.issues ?? []).length === 0 ? (
+              <p style={{ fontSize: "0.8rem", color: "#9ca3af" }}>
+                No issues reported yet.
+              </p>
+            ) : (
+              (event.issues ?? []).map((iss) => (
+                <li key={iss.id} className="eventura-list-item">
                   <div>
-                    <div className="issue-text">{i.text}</div>
-                    <div className="issue-time">
-                      {new Date(i.time).toLocaleTimeString("en-IN", {
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      })}
+                    <div className="eventura-list-title">{iss.text}</div>
+                    <div className="eventura-list-sub">
+                      {new Date(iss.createdAt).toLocaleString("en-IN")} ·{" "}
+                      {iss.status === "Open" ? "Open" : "Resolved"}
                     </div>
                   </div>
                   <button
                     type="button"
                     className={
-                      "issue-toggle" + (i.resolved ? " issue-toggle-on" : "")
+                      "eventura-tag " +
+                      (iss.status === "Open"
+                        ? "eventura-tag-amber"
+                        : "eventura-tag-green")
                     }
-                    onClick={() => onIssueToggle(ev.id, i.id)}
+                    onClick={() => handleToggleIssue(iss.id)}
                   >
-                    {i.resolved ? "Resolved" : "Open"}
+                    {iss.status === "Open" ? "Mark resolved" : "Re-open"}
                   </button>
                 </li>
-              ))}
-            </ul>
-          )}
-
-          <div className="event-scorecard">
-            <div className="event-score-main">{score}/100</div>
-            <div className="event-score-label">Event scorecard</div>
-            <div className="event-score-sub">
-              Based on margin, vendors, issues & client experience.
-            </div>
-          </div>
+              ))
+            )}
+          </ul>
         </div>
       </div>
     </div>
   );
 }
 
-/* ========== SHARED LAYOUT COMPONENTS ========== */
+/* ======= Shared sidebar/topbar like other pages ======= */
 
 function SidebarCore({ user, active }: { user: User; active: string }) {
   const isCEO = user.role === "CEO";
@@ -1163,4 +1283,52 @@ function SidebarLink(props: {
       <span>{props.label}</span>
     </Link>
   );
+}
+
+/* ===== Helper for timeline ===== */
+
+type TimelineItem = {
+  label: string;
+  displayDate: string;
+  isPast: boolean;
+};
+
+function buildTimeline(eventDate: Date | null): TimelineItem[] {
+  if (!eventDate) {
+    return [
+      {
+        label: "Set event date",
+        displayDate: "No date selected",
+        isPast: false,
+      },
+    ];
+  }
+
+  const steps = [
+    { label: "Venue booking", offsetDays: -60 },
+    { label: "Vendor confirmations", offsetDays: -45 },
+    { label: "Decor mockups ready", offsetDays: -30 },
+    { label: "Logistics planning", offsetDays: -7 },
+    { label: "Material loading", offsetDays: -3 },
+    { label: "Event day – execution", offsetDays: 0 },
+    { label: "Post-event payment & review", offsetDays: 2 },
+  ];
+
+  const today = new Date();
+
+  return steps.map((step) => {
+    const d = new Date(eventDate);
+    d.setDate(d.getDate() + step.offsetDays);
+    const displayDate = d.toLocaleDateString("en-IN", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+    });
+    const isPast = d.getTime() < today.getTime();
+    return {
+      label: step.label,
+      displayDate,
+      isPast,
+    };
+  });
 }
