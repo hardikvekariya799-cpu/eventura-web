@@ -763,11 +763,11 @@ function HRSchedulingView({
               </tbody>
             </table>
           </div>
-          <p className="eventura-small-text" style={{ marginTop: "0.5rem" }}>
-            When workload > 90% consistently, HR alert: consider adding
-            freelancers or hiring.
-          </p>
-        </div>
+            <p className="eventura-small-text" style={{ marginTop: "0.5rem" }}>
+               When workload {">"} 90% consistently, HR alert: consider adding freelancers                
+               or hiring.
+             </p>
+      </div>
       </section>
     </>
   );
