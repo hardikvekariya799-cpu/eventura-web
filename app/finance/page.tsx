@@ -2,7 +2,6 @@
 
 import React, { useEffect, useState } from "react";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
 
 type Role = "CEO" | "Staff";
 type User = { name: string; role: Role; city: string };
@@ -47,8 +46,6 @@ type CalculatorState = {
 };
 
 export default function FinancePage() {
-  const searchParams = useSearchParams();
-
   const [user, setUser] = useState<User | null>(null);
   const [entries, setEntries] = useState<FinanceEntry[]>([]);
   const [form, setForm] = useState<Omit<FinanceEntry, "id">>({
@@ -187,14 +184,17 @@ export default function FinancePage() {
     URL.revokeObjectURL(url);
   }
 
-  // auto-download if coming from dashboard
+  // auto-download if coming from dashboard (?download=1)
   useEffect(() => {
-    const flag = searchParams.get("download");
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const flag = params.get("download");
     if (flag === "1" && entries.length > 0) {
       handleDownload();
     }
+    // only re-run when entries length changes
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchParams, entries.length]);
+  }, [entries.length]);
 
   // totals
   let totalIncome = 0;
@@ -252,7 +252,9 @@ export default function FinancePage() {
               </p>
             </div>
             <div className="finance-header-tags">
-              <span className="finance-chip">This month: ₹{formatCurrency(net)}</span>
+              <span className="finance-chip">
+                This month: ₹{formatCurrency(net)}
+              </span>
               <span className="finance-chip-outline">
                 Margin: {margin.toFixed(1)}%
               </span>
@@ -339,9 +341,9 @@ export default function FinancePage() {
             </button>
           </section>
 
-          {/* MAIN GRID: LEFT = ACTIVE TAB, RIGHT = MONTH SUMMARY */}
+          {/* MAIN GRID */}
           <section className="finance-main-grid">
-            {/* LEFT SIDE CONTENT SWITCHES BY TAB */}
+            {/* LEFT PANEL – tab content */}
             <div className="eventura-panel">
               {activeTab === "income" || activeTab === "expenses" ? (
                 <>
@@ -429,7 +431,10 @@ export default function FinancePage() {
                     </div>
                   </form>
 
-                  <div className="eventura-table-wrapper" style={{ marginTop: "1rem" }}>
+                  <div
+                    className="eventura-table-wrapper"
+                    style={{ marginTop: "1rem" }}
+                  >
                     {entries.length === 0 ? (
                       <p
                         style={{
@@ -507,16 +512,21 @@ export default function FinancePage() {
                       balance={65000}
                     />
                   </div>
-                  <p className="eventura-small-text" style={{ marginTop: "0.7rem" }}>
-                    For full accounting & GST, you’ll still use QuickBooks / Zoho
-                    Books – this is a control tower view for the CEO.
+                  <p
+                    className="eventura-small-text"
+                    style={{ marginTop: "0.7rem" }}
+                  >
+                    For full accounting & GST, you’ll still use QuickBooks /
+                    Zoho Books – this is a control tower view for the CEO.
                   </p>
                 </>
               )}
 
               {activeTab === "wishlist" && (
                 <>
-                  <h2 className="eventura-panel-title">Wishlist – future spends</h2>
+                  <h2 className="eventura-panel-title">
+                    Wishlist – future spends
+                  </h2>
                   <p className="eventura-small-text">
                     Track big-ticket purchases you want to plan: new mandap set,
                     vehicle, warehouse, etc.
@@ -605,7 +615,10 @@ export default function FinancePage() {
                       Expenses tab.
                     </p>
                   ) : (
-                    <ul className="eventura-list" style={{ marginTop: "0.7rem" }}>
+                    <ul
+                      className="eventura-list"
+                      style={{ marginTop: "0.7rem" }}
+                    >
                       {entries.map((e) => {
                         const income = parseMoney(e.income);
                         const expenses = parseMoney(e.expenses);
@@ -616,7 +629,9 @@ export default function FinancePage() {
                         return (
                           <li key={e.id} className="eventura-list-item">
                             <div>
-                              <div className="eventura-list-title">{e.month}</div>
+                              <div className="eventura-list-title">
+                                {e.month}
+                              </div>
                               <div className="eventura-list-sub">
                                 Income: ₹{e.income} · Expenses: ₹{e.expenses} ·
                                 Net: ₹{formatCurrency(netValue)}
@@ -688,7 +703,10 @@ export default function FinancePage() {
                   Auto calculator – break-even
                 </h2>
 
-                <div className="eventura-form-grid" style={{ marginTop: "0.6rem" }}>
+                <div
+                  className="eventura-form-grid"
+                  style={{ marginTop: "0.6rem" }}
+                >
                   <div className="eventura-field">
                     <label className="eventura-label" htmlFor="avgRevenue">
                       Avg revenue per event (₹)
@@ -764,7 +782,9 @@ export default function FinancePage() {
                   </div>
                   <div className="finance-calc-card">
                     <div className="finance-calc-label">Break-even events</div>
-                    <div className="finance-calc-value">{breakEvenEvents}</div>
+                    <div className="finance-calc-value">
+                      {breakEvenEvents}
+                    </div>
                   </div>
                 </div>
               </div>
