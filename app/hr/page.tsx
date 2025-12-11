@@ -27,6 +27,170 @@ type TeamMember = {
   role: StaffRole;
   city: string;
   status: StaffStatus;
+  workload: number;
+  monthlySalary: number;
+  eventsThisMonth: number;
+  rating: number;
+  skills: string[];
+};
+
+type HiringStage =
+  | "Sourced"
+  | "Shortlisted"
+  | "Interviewed"
+  | "Trial Event"
+  | "Hired"
+  | "Rejected";
+
+type Candidate = {
+  id: number;
+  name: string;
+  role: StaffRole;
+  city: string;
+  expectedSalary: number;
+  stage: HiringStage;
+  fitScore: number;
+};
+
+type TrainingItem = {
+  id: number;
+  title: string;
+  roleTarget: StaffRole | "All";
+  assignee: string;
+  status: "Planned" | "In Progress" | "Completed";
+  beforeScore: number;
+  afterScore?: number;
+};
+
+type HRSummary = {
+  coreCount: number;
+  freelancersCount: number;
+  traineesCount: number;
+  totalCost: number;
+  avgWorkload: number;
+  roleCounts: Record<StaffRole, number>;
+  weddingsCapacity: number;
+  corporatesCapacity: number;
+};
+
+/* ========= Seed data ========= */
+
+const seedTeam: TeamMember[] = [
+  {
+    id: 1,
+    name: "Hardik Vekariya",
+    role: "Operations",
+    city: "Surat",
+    status: "Core",
+    workload: 82,
+    monthlySalary: 0,
+    eventsThisMonth: 6,
+    rating: 5,
+    skills: ["Strategy", "Finance", "Vendor Negotiation"],
+  },
+  {
+    id: 2,
+    name: "Shubh Parekh",
+    role: "Event Manager",
+    city: "Surat",
+    status: "Core",
+    workload: 88,
+    monthlySalary: 55000,
+    eventsThisMonth: 5,
+    rating: 4.7,
+    skills: ["Client Handling", "Planning", "Budgeting"],
+  },
+  {
+    id: 3,
+    name: "Dixit Bhuva",
+    role: "Marketing",
+    city: "Surat",
+    status: "Core",
+    workload: 76,
+    monthlySalary: 45000,
+    eventsThisMonth: 3,
+    rating: 4.5,
+    skills: ["Digital Marketing", "Social Media", "Leads"],
+  },
+  {
+    id: 4,
+    name: "Priya Shah",
+    role: "Decor Specialist",
+    city: "Surat",
+    status: "Core",
+    workload: 92,
+    monthlySalary: 38000,
+    eventsThisMonth: 7,
+    rating: 4.8,
+    skills: ["Stage Design", "Floral", "3D Layout"],
+  },
+];
+
+/* ========= Helper functions ========= */
+
+function gaugeColor(value: number): string {
+  if (value < 60) return "eventura-tag-green";
+  if (value <= 85) return "eventura-tag-blue";
+  return "eventura-tag-amber";
+}
+
+function workloadLabel(value: number): string {
+  if (value < 60) return "Under-utilized";
+  if (value <= 85) return "Balanced";
+  return "Overloaded";
+}
+
+/* ========= Page ========= */
+
+export default function HRPage() {
+  const [user, setUser] = useState<User | null>(null);
+  const [team] = useState(seedTeam);
+  const [view, setView] = useState<"home" | "scheduling" | "hiring" | "training">("home");
+
+  useEffect(() => {
+    const raw = localStorage.getItem(USER_KEY);
+    if (!raw) {
+      window.location.href = "/login";
+      return;
+    }
+    try {
+      setUser(JSON.parse(raw));
+    } catch {
+      localStorage.removeItem(USER_KEY);
+      window.location.href = "/login";
+    }
+  }, []);
+
+  if (!user) return null;
+"use client";
+
+import React, { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+
+/* ========= Shared types ========= */
+
+type Role = "CEO" | "Staff";
+type User = { name: string; role: Role; city: string };
+
+const USER_KEY = "eventura-user";
+
+type StaffRole =
+  | "Event Manager"
+  | "Decor Specialist"
+  | "Logistics"
+  | "Marketing"
+  | "Sales"
+  | "Accountant"
+  | "Operations";
+
+type StaffStatus = "Core" | "Freelancer" | "Trainee";
+
+type TeamMember = {
+  id: number;
+  name: string;
+  role: StaffRole;
+  city: string;
+  status: StaffStatus;
   workload: number; // % utilization
   monthlySalary: number; // 0 for freelancers, trainees can have stipend
   eventsThisMonth: number;
@@ -62,18 +226,7 @@ type TrainingItem = {
   afterScore?: number;
 };
 
-type HRSummary = {
-  coreCount: number;
-  freelancersCount: number;
-  traineesCount: number;
-  totalCost: number;
-  avgWorkload: number;
-  roleCounts: Record<StaffRole, number>;
-  weddingsCapacity: number;
-  corporatesCapacity: number;
-};
-
-/* ========= Seed data ========= */
+/* ========= Seed data (can later move to localStorage or backend) ========= */
 
 const seedTeam: TeamMember[] = [
   {
@@ -278,6 +431,7 @@ export default function HRPage() {
   const [candidates] = useState<Candidate[]>(seedCandidates);
   const [training] = useState<TrainingItem[]>(seedTraining);
 
+  // Simple view switch inside HR tab
   const [view, setView] = useState<"home" | "scheduling" | "hiring" | "training">(
     "home"
   );
@@ -299,7 +453,7 @@ export default function HRPage() {
     }
   }, []);
 
-  const summary: HRSummary = useMemo(() => {
+  const summary = useMemo(() => {
     const core = team.filter((m) => m.status === "Core");
     const freelancers = team.filter((m) => m.status === "Freelancer");
     const trainees = team.filter((m) => m.status === "Trainee");
@@ -327,6 +481,8 @@ export default function HRPage() {
       roleCounts[m.role] = (roleCounts[m.role] || 0) + 1;
     });
 
+    // Rough capacity: assume each core Event Manager can handle ~3 weddings/month,
+    // each Decor ~3, each Logistics ~4. We keep it simple.
     const eventManagers = core.filter((m) => m.role === "Event Manager").length;
     const decor = core.filter((m) => m.role === "Decor Specialist").length;
     const logistics = core.filter((m) => m.role === "Logistics").length;
@@ -452,10 +608,33 @@ function HRHomeView({
   team,
   isCEO,
 }: {
-  summary: HRSummary;
+  summary: ReturnType<typeof computeSummaryDummy>;
   team: TeamMember[];
   isCEO: boolean;
 }) {
+  // Type helper: we call computeSummaryDummy only for type, actual summary is from useMemo
+  function computeSummaryDummy() {
+    return {
+      coreCount: 0,
+      freelancersCount: 0,
+      traineesCount: 0,
+      totalCost: 0,
+      avgWorkload: 0,
+      roleCounts: {
+        "Event Manager": 0,
+        "Decor Specialist": 0,
+        Logistics: 0,
+        Marketing: 0,
+        Sales: 0,
+        Accountant: 0,
+        Operations: 0,
+      } as Record<StaffRole, number>,
+      weddingsCapacity: 0,
+      corporatesCapacity: 0,
+    };
+  }
+
+  // Find role-level workload “heatmap”
   const roles: StaffRole[] = [
     "Event Manager",
     "Decor Specialist",
@@ -547,13 +726,15 @@ function HRHomeView({
                       No core staff yet
                     </span>
                   ) : (
-                    <span
-                      className={
-                        "eventura-tag " + gaugeColor(r.avgWorkload)
-                      }
-                    >
-                      {r.avgWorkload}% · {workloadLabel(r.avgWorkload)}
-                    </span>
+                    <>
+                      <span
+                        className={
+                          "eventura-tag " + gaugeColor(r.avgWorkload)
+                        }
+                      >
+                        {r.avgWorkload}% · {workloadLabel(r.avgWorkload)}
+                      </span>
+                    </>
                   )}
                 </p>
               </div>
@@ -601,29 +782,36 @@ function HRSchedulingView({
   summary,
 }: {
   team: TeamMember[];
-  summary: HRSummary;
+  summary: {
+    weddingsCapacity: number;
+    corporatesCapacity: number;
+    coreCount: number;
+    freelancersCount: number;
+    traineesCount: number;
+  };
 }) {
+  // Dummy schedule of next 7–10 days
   const schedule = [
     {
       date: "2025-12-14",
       label: "Patel Wedding Sangeet",
       city: "Surat",
       crew: ["Shubh", "Priya Shah", "Jay Patel", "Decor Crew A"],
-      risk: "Medium" as "Low" | "Medium" | "High",
+      risk: "Medium",
     },
     {
       date: "2025-12-16",
       label: "Corporate Gala – XYZ Textiles",
       city: "Surat",
       crew: ["Shubh", "Riya Mehta", "Logistics Crew A"],
-      risk: "Low" as "Low" | "Medium" | "High",
+      risk: "Low",
     },
     {
       date: "2025-12-18",
       label: "Mehta Engagement",
       city: "Surat",
       crew: ["Trainee Planner", "Priya Shah"],
-      risk: "Medium" as "Low" | "Medium" | "High",
+      risk: "Medium",
     },
   ];
 
@@ -654,9 +842,7 @@ function HRSchedulingView({
 
       <section className="eventura-columns">
         <div className="eventura-panel">
-          <h2 className="eventura-panel-title">
-            Crew scheduling – upcoming events
-          </h2>
+          <h2 className="eventura-panel-title">Crew scheduling – upcoming events</h2>
           <div className="eventura-table-wrapper">
             <table className="eventura-table">
               <thead>
@@ -806,10 +992,7 @@ function HRHiringView({
                     candidate(s)
                   </span>
                 </p>
-                <ul
-                  className="eventura-bullets"
-                  style={{ marginTop: "0.4rem" }}
-                >
+                <ul className="eventura-bullets" style={{ marginTop: "0.4rem" }}>
                   {stageCandidates.length === 0 && (
                     <li style={{ color: "#9ca3af", fontSize: "0.8rem" }}>
                       No candidates at this stage yet.
@@ -884,21 +1067,15 @@ function HRHiringView({
         <ul className="eventura-bullets">
           <li>
             Decor freelancers:{" "}
-            {
-              team.filter(
-                (m) =>
-                  m.status === "Freelancer" &&
-                  m.role === "Decor Specialist"
-              ).length
-            }
+            {team.filter(
+              (m) => m.status === "Freelancer" && m.role === "Decor Specialist"
+            ).length}
           </li>
           <li>
             Logistics freelancers:{" "}
-            {
-              team.filter(
-                (m) => m.status === "Freelancer" && m.role === "Logistics"
-              ).length
-            }
+            {team.filter(
+              (m) => m.status === "Freelancer" && m.role === "Logistics"
+            ).length}
           </li>
         </ul>
         <p className="eventura-small-text">
