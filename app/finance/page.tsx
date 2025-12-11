@@ -192,7 +192,7 @@ export default function FinancePage() {
     if (flag === "1" && entries.length > 0) {
       handleDownload();
     }
-    // only re-run when entries length changes
+    // only depend on entries length so it runs once when data is there
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entries.length]);
 
