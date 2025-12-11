@@ -73,7 +73,7 @@ type HRSummary = {
   corporatesCapacity: number;
 };
 
-/* ========= Seed data (can later move to localStorage or backend) ========= */
+/* ========= Seed data ========= */
 
 const seedTeam: TeamMember[] = [
   {
@@ -278,7 +278,6 @@ export default function HRPage() {
   const [candidates] = useState<Candidate[]>(seedCandidates);
   const [training] = useState<TrainingItem[]>(seedTraining);
 
-  // Simple view switch inside HR tab
   const [view, setView] = useState<"home" | "scheduling" | "hiring" | "training">(
     "home"
   );
@@ -324,12 +323,11 @@ export default function HRPage() {
       Accountant: 0,
       Operations: 0,
     };
+
     core.forEach((m) => {
       roleCounts[m.role] = (roleCounts[m.role] || 0) + 1;
     });
 
-    // Rough capacity: assume each core Event Manager can handle ~3 weddings/month,
-    // each Decor ~3, each Logistics ~4. We keep it simple.
     const eventManagers = core.filter((m) => m.role === "Event Manager").length;
     const decor = core.filter((m) => m.role === "Decor Specialist").length;
     const logistics = core.filter((m) => m.role === "Logistics").length;
@@ -374,10 +372,10 @@ export default function HRPage() {
           {/* Header */}
           <div className="eventura-header-row">
             <div>
-              <h1 className="eventura-page-title">HR & Crew Control</h1>
+              <h1 className="eventura-page-title">HR &amp; Crew Control</h1>
               <p className="eventura-subtitle">
                 See your crew capacity, salary cost, hiring pipeline and
-                training – all connected to Eventura events & finance.
+                training – all connected to Eventura events &amp; finance.
               </p>
             </div>
             <div className="eventura-chips-row">
@@ -401,7 +399,7 @@ export default function HRPage() {
                 }
                 onClick={() => setView("scheduling")}
               >
-                Scheduling & Utilization
+                Scheduling &amp; Utilization
               </button>
               <button
                 type="button"
@@ -413,7 +411,7 @@ export default function HRPage() {
                 }
                 onClick={() => setView("hiring")}
               >
-                Hiring & Freelancers
+                Hiring &amp; Freelancers
               </button>
               <button
                 type="button"
@@ -425,7 +423,7 @@ export default function HRPage() {
                 }
                 onClick={() => setView("training")}
               >
-                Training & Skills
+                Training &amp; Skills
               </button>
             </div>
           </div>
@@ -459,7 +457,6 @@ function HRHomeView({
   team: TeamMember[];
   isCEO: boolean;
 }) {
-  // Find role-level workload “heatmap”
   const roles: StaffRole[] = [
     "Event Manager",
     "Decor Specialist",
@@ -523,7 +520,7 @@ function HRHomeView({
             {summary.corporatesCapacity} corporates
           </p>
           <p className="eventura-card-note">
-            Based on current Event Managers, Decor & Logistics.
+            Based on current Event Managers, Decor &amp; Logistics.
           </p>
         </div>
       </section>
@@ -552,9 +549,7 @@ function HRHomeView({
                     </span>
                   ) : (
                     <span
-                      className={
-                        "eventura-tag " + gaugeColor(r.avgWorkload)
-                      }
+                      className={"eventura-tag " + gaugeColor(r.avgWorkload)}
                     >
                       {r.avgWorkload}% · {workloadLabel(r.avgWorkload)}
                     </span>
@@ -566,7 +561,7 @@ function HRHomeView({
         </div>
 
         <div className="eventura-panel">
-          <h2 className="eventura-panel-title">Role mix & cost view</h2>
+          <h2 className="eventura-panel-title">Role mix &amp; cost view</h2>
           <ul className="eventura-bullets">
             <li>
               Event Managers: {summary.roleCounts["Event Manager"]} (ideal:
@@ -583,9 +578,9 @@ function HRHomeView({
             <li>
               Sales + Marketing:{" "}
               {summary.roleCounts["Sales"] + summary.roleCounts["Marketing"]}{" "}
-              (driving leads & topline).
+              (driving leads &amp; topline).
             </li>
-            <li>Accountant & Operations supporting finance discipline.</li>
+            <li>Accountant &amp; Operations supporting finance discipline.</li>
           </ul>
           {isCEO && (
             <div className="eventura-actions" style={{ marginTop: "0.8rem" }}>
@@ -605,30 +600,35 @@ function HRSchedulingView({
   summary,
 }: {
   team: TeamMember[];
-  summary: HRSummary;
+  summary: {
+    weddingsCapacity: number;
+    corporatesCapacity: number;
+    coreCount: number;
+    freelancersCount: number;
+    traineesCount: number;
+  };
 }) {
-  // Dummy schedule of next 7–10 days
   const schedule = [
     {
       date: "2025-12-14",
       label: "Patel Wedding Sangeet",
       city: "Surat",
       crew: ["Shubh", "Priya Shah", "Jay Patel", "Decor Crew A"],
-      risk: "Medium" as "Low" | "Medium" | "High",
+      risk: "Medium" as const,
     },
     {
       date: "2025-12-16",
       label: "Corporate Gala – XYZ Textiles",
       city: "Surat",
       crew: ["Shubh", "Riya Mehta", "Logistics Crew A"],
-      risk: "Low" as "Low" | "Medium" | "High",
+      risk: "Low" as const,
     },
     {
       date: "2025-12-18",
       label: "Mehta Engagement",
       city: "Surat",
       crew: ["Trainee Planner", "Priya Shah"],
-      risk: "Medium" as "Low" | "Medium" | "High",
+      risk: "Medium" as const,
     },
   ];
 
@@ -666,7 +666,7 @@ function HRSchedulingView({
             <table className="eventura-table">
               <thead>
                 <tr>
-                  <th>Date</th>
+                  <th>Дата</th>
                   <th>Event</th>
                   <th>City</th>
                   <th>Crew</th>
@@ -706,7 +706,7 @@ function HRSchedulingView({
             </table>
           </div>
           <p className="eventura-small-text" style={{ marginTop: "0.5rem" }}>
-            In future we can connect this with actual Events & Calendar data
+            In future we can connect this with actual Events &amp; Calendar data
             for live double-booking checks.
           </p>
         </div>
@@ -735,9 +735,7 @@ function HRSchedulingView({
                       <td>{m.role}</td>
                       <td>
                         <span
-                          className={
-                            "eventura-tag " + gaugeColor(m.workload)
-                          }
+                          className={"eventura-tag " + gaugeColor(m.workload)}
                         >
                           {m.workload}% · {workloadLabel(m.workload)}
                         </span>
@@ -749,7 +747,7 @@ function HRSchedulingView({
             </table>
           </div>
           <p className="eventura-small-text" style={{ marginTop: "0.5rem" }}>
-            When workload {" > "} 90% consistently, HR alert: consider adding
+            When workload &gt; 90% consistently, HR alert: consider adding
             freelancers or hiring.
           </p>
         </div>
@@ -801,7 +799,9 @@ function HRHiringView({
           style={{ gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))" }}
         >
           {stages.map((stage) => {
-            const stageCandidates = candidates.filter((c) => c.stage === stage);
+            const stageCandidates = candidates.filter(
+              (c) => c.stage === stage
+            );
             return (
               <div key={stage} className="eventura-card">
                 <p className="eventura-card-label">{stage}</p>
@@ -811,7 +811,10 @@ function HRHiringView({
                     candidate(s)
                   </span>
                 </p>
-                <ul className="eventura-bullets" style={{ marginTop: "0.4rem" }}>
+                <ul
+                  className="eventura-bullets"
+                  style={{ marginTop: "0.4rem" }}
+                >
                   {stageCandidates.length === 0 && (
                     <li style={{ color: "#9ca3af", fontSize: "0.8rem" }}>
                       No candidates at this stage yet.
@@ -841,12 +844,12 @@ function HRHiringView({
         </div>
         <p className="eventura-small-text" style={{ marginTop: "0.5rem" }}>
           In the future, we can convert hired candidates automatically into HR
-          profiles with salary & role from your HR plan.
+          profiles with salary &amp; role from your HR plan.
         </p>
       </div>
 
       <div className="eventura-panel">
-        <h2 className="eventura-panel-title">Role coverage & alerts</h2>
+        <h2 className="eventura-panel-title">Role coverage &amp; alerts</h2>
         <div className="eventura-table-wrapper">
           <table className="eventura-table">
             <thead>
@@ -922,7 +925,7 @@ function HRTrainingView({
   return (
     <section className="eventura-columns">
       <div className="eventura-panel">
-        <h2 className="eventura-panel-title">Skill & training matrix</h2>
+        <h2 className="eventura-panel-title">Skill &amp; training matrix</h2>
         <div className="eventura-table-wrapper">
           <table className="eventura-table">
             <thead>
@@ -959,7 +962,7 @@ function HRTrainingView({
       </div>
 
       <div className="eventura-panel">
-        <h2 className="eventura-panel-title">Training & development</h2>
+        <h2 className="eventura-panel-title">Training &amp; development</h2>
         <div className="eventura-table-wrapper">
           <table className="eventura-table">
             <thead>
@@ -1082,20 +1085,20 @@ function SidebarCore({ user, active }: { user: User; active: string }) {
           active={active === "inventory"}
         />
         {isCEO && (
-          <SidebarLink
-            href="/reports"
-            label="Reports & Analytics"
-            icon="📈"
-            active={active === "reports"}
-          />
-        )}
-        {isCEO && (
-          <SidebarLink
-            href="/settings"
-            label="Settings & Access"
-            icon="⚙️"
-            active={active === "settings"}
-          />
+          <>
+            <SidebarLink
+              href="/reports"
+              label="Reports & Analytics"
+              icon="📈"
+              active={active === "reports"}
+            />
+            <SidebarLink
+              href="/settings"
+              label="Settings & Access"
+              icon="⚙️"
+              active={active === "settings"}
+            />
+          </>
         )}
       </nav>
       <div className="eventura-sidebar-footer">
