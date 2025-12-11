@@ -277,11 +277,11 @@ export default function HRPage() {
   const [team] = useState<TeamMember[]>(seedTeam);
   const [candidates] = useState<Candidate[]>(seedCandidates);
   const [training] = useState<TrainingItem[]>(seedTraining);
+
   const [view, setView] = useState<"home" | "scheduling" | "hiring" | "training">(
     "home"
   );
 
-  // Auth
   useEffect(() => {
     if (typeof window === "undefined") return;
     const raw = window.localStorage.getItem(USER_KEY);
@@ -354,7 +354,6 @@ export default function HRPage() {
   }, [team]);
 
   if (!user) return null;
-
   const isCEO = user.role === "CEO";
 
   return (
@@ -367,7 +366,6 @@ export default function HRPage() {
         <TopbarCore user={user} />
 
         <div className="eventura-content">
-          {/* Header */}
           <div className="eventura-header-row">
             <div>
               <h1 className="eventura-page-title">HR & Crew Control</h1>
@@ -485,7 +483,6 @@ function HRHomeView({
 
   return (
     <>
-      {/* Top summary */}
       <section className="eventura-grid">
         <div className="eventura-card eventura-card-glow">
           <p className="eventura-card-label">Core staff</p>
@@ -523,7 +520,6 @@ function HRHomeView({
         </div>
       </section>
 
-      {/* Org heatmap & role mix */}
       <section className="eventura-columns">
         <div className="eventura-panel">
           <h2 className="eventura-panel-title">Org heatmap by role</h2>
