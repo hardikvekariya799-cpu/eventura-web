@@ -73,7 +73,7 @@ type HRSummary = {
   corporatesCapacity: number;
 };
 
-/* ========= Seed data ========= */
+/* ========= Seed data (can later move to localStorage or backend) ========= */
 
 const seedTeam: TeamMember[] = [
   {
@@ -277,6 +277,8 @@ export default function HRPage() {
   const [team] = useState<TeamMember[]>(seedTeam);
   const [candidates] = useState<Candidate[]>(seedCandidates);
   const [training] = useState<TrainingItem[]>(seedTraining);
+
+  // Simple view switch inside HR tab
   const [view, setView] = useState<"home" | "scheduling" | "hiring" | "training">(
     "home"
   );
@@ -326,6 +328,8 @@ export default function HRPage() {
       roleCounts[m.role] = (roleCounts[m.role] || 0) + 1;
     });
 
+    // Rough capacity: assume each core Event Manager can handle ~3 weddings/month,
+    // each Decor ~3, each Logistics ~4. We keep it simple.
     const eventManagers = core.filter((m) => m.role === "Event Manager").length;
     const decor = core.filter((m) => m.role === "Decor Specialist").length;
     const logistics = core.filter((m) => m.role === "Logistics").length;
@@ -354,6 +358,7 @@ export default function HRPage() {
   }, [team]);
 
   if (!user) return null;
+
   const isCEO = user.role === "CEO";
 
   return (
@@ -454,6 +459,7 @@ function HRHomeView({
   team: TeamMember[];
   isCEO: boolean;
 }) {
+  // Find role-level workload “heatmap”
   const roles: StaffRole[] = [
     "Event Manager",
     "Decor Specialist",
@@ -601,7 +607,7 @@ function HRSchedulingView({
   team: TeamMember[];
   summary: HRSummary;
 }) {
-  // Dummy schedule of next events
+  // Dummy schedule of next 7–10 days
   const schedule = [
     {
       date: "2025-12-14",
@@ -743,7 +749,7 @@ function HRSchedulingView({
             </table>
           </div>
           <p className="eventura-small-text" style={{ marginTop: "0.5rem" }}>
-            When workload {">"} 90% consistently, HR alert: consider adding
+            When workload {" > "} 90% consistently, HR alert: consider adding
             freelancers or hiring.
           </p>
         </div>
@@ -805,10 +811,7 @@ function HRHiringView({
                     candidate(s)
                   </span>
                 </p>
-                <ul
-                  className="eventura-bullets"
-                  style={{ marginTop: "0.4rem" }}
-                >
+                <ul className="eventura-bullets" style={{ marginTop: "0.4rem" }}>
                   {stageCandidates.length === 0 && (
                     <li style={{ color: "#9ca3af", fontSize: "0.8rem" }}>
                       No candidates at this stage yet.
