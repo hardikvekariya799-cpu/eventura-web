@@ -1,24 +1,36 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+
+/* ========= Shared types & keys ========= */
 
 type Role = "CEO" | "Staff";
 type User = { name: string; role: Role; city: string };
 
 const USER_KEY = "eventura-user";
-const FINANCE_KEY = "eventura-finance";
+const FINANCE_KEY = "eventura-finance-board";
 
-type FinanceEntry = {
+type FinanceRow = {
   id: number;
-  month: string; // e.g. 2025-01
+  label: string;
+  month: string; // "2025-12"
   income: string;
-  expenses: string;
+  expense: string;
+  category:
+    | "Client Payment"
+    | "Vendor Payment"
+    | "Salary"
+    | "Office & Rent"
+    | "Marketing"
+    | "Travel"
+    | "Investment"
+    | "Other";
   notes: string;
 };
 
 function parseMoney(value: string): number {
-  const cleaned = value.replace(/[₹, ]/g, "");
+  const cleaned = value.replace(/[₹, ,]/g, "");
   const n = parseFloat(cleaned);
   return isNaN(n) ? 0 : n;
 }
@@ -29,160 +41,192 @@ function formatCurrency(value: number): string {
   });
 }
 
+/* ========= MAIN PAGE ========= */
+
 export default function FinancePage() {
   const [user, setUser] = useState<User | null>(null);
-  const [entries, setEntries] = useState<FinanceEntry[]>([]);
-  const [draft, setDraft] = useState<Omit<FinanceEntry, "id">>({
+  const [rows, setRows] = useState<FinanceRow[]>([]);
+  const [selectedMonth, setSelectedMonth] = useState<string>("");
+  const [filterCategory, setFilterCategory] = useState<string>("All");
+
+  const [draft, setDraft] = useState<Omit<FinanceRow, "id">>({
+    label: "",
     month: "",
     income: "",
-    expenses: "",
+    expense: "",
+    category: "Client Payment",
     notes: "",
   });
 
-  // load user + finance data
+  const [editingId, setEditingId] = useState<number | null>(null);
+
+  // Auth: must be logged in (CEO or Staff)
   useEffect(() => {
     if (typeof window === "undefined") return;
-
-    const rawUser = window.localStorage.getItem(USER_KEY);
-    if (!rawUser) {
+    const raw = window.localStorage.getItem(USER_KEY);
+    if (!raw) {
       window.location.href = "/login";
       return;
     }
     try {
-      const u: User = JSON.parse(rawUser);
-      if (u.role !== "CEO") {
-        // only CEO should see full finance page
-        window.location.href = "/";
-        return;
-      }
+      const u: User = JSON.parse(raw);
       setUser(u);
     } catch {
       window.localStorage.removeItem(USER_KEY);
       window.location.href = "/login";
-      return;
-    }
-
-    const rawFinance = window.localStorage.getItem(FINANCE_KEY);
-    if (rawFinance) {
-      try {
-        setEntries(JSON.parse(rawFinance));
-      } catch {
-        // ignore parsing errors
-      }
     }
   }, []);
 
-  // persist on change
+  // Load finance board
   useEffect(() => {
     if (typeof window === "undefined") return;
-    window.localStorage.setItem(FINANCE_KEY, JSON.stringify(entries));
-  }, [entries]);
-
-  // 🚫 NO useSearchParams – we use window.location.search instead
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const params = new URLSearchParams(window.location.search);
-    const downloadFlag = params.get("download");
-    if (downloadFlag === "1" && entries.length > 0) {
-      handleDownload();
+    const raw = window.localStorage.getItem(FINANCE_KEY);
+    if (!raw) {
+      // seed example
+      const seed: FinanceRow[] = [
+        {
+          id: Date.now(),
+          label: "Patel Wedding Final Payment",
+          month: "2025-12",
+          income: "1200000",
+          expense: "800000",
+          category: "Client Payment",
+          notes: "Includes decor + catering + artist.",
+        },
+        {
+          id: Date.now() + 1,
+          label: "Office & Studio Rent",
+          month: "2025-12",
+          income: "",
+          expense: "75000",
+          category: "Office & Rent",
+          notes: "Eventura Reality Surat.",
+        },
+      ];
+      setRows(seed);
+      window.localStorage.setItem(FINANCE_KEY, JSON.stringify(seed));
+      return;
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [entries.length]);
+    try {
+      const parsed: FinanceRow[] = JSON.parse(raw);
+      setRows(parsed);
+    } catch {
+      // ignore corrupt data
+    }
+  }, []);
+
+  // Persist on change
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(FINANCE_KEY, JSON.stringify(rows));
+  }, [rows]);
 
   function handleDraftChange(
-    e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>
+    e:
+      | React.ChangeEvent<HTMLInputElement>
+      | React.ChangeEvent<HTMLTextAreaElement>
+      | React.ChangeEvent<HTMLSelectElement>
   ) {
     const { name, value } = e.target;
     setDraft((prev) => ({ ...prev, [name]: value }));
   }
 
-  function handleAddEntry(e: React.FormEvent) {
-    e.preventDefault();
-    if (!draft.month || (!draft.income && !draft.expenses)) {
-      alert("Month and at least income or expenses are required.");
-      return;
-    }
-    const newEntry: FinanceEntry = {
-      id: Date.now(),
-      ...draft,
-    };
-    setEntries((prev) => [newEntry, ...prev]);
+  function resetDraft() {
+    setEditingId(null);
     setDraft({
+      label: "",
       month: "",
       income: "",
-      expenses: "",
+      expense: "",
+      category: "Client Payment",
       notes: "",
     });
   }
 
-  function handleDeleteEntry(id: number) {
-    if (!confirm("Delete this finance record?")) return;
-    setEntries((prev) => prev.filter((e) => e.id !== id));
-  }
-
-  function handleInlineChange(
-    id: number,
-    field: keyof Omit<FinanceEntry, "id">,
-    value: string
-  ) {
-    setEntries((prev) =>
-      prev.map((e) =>
-        e.id === id
-          ? {
-              ...e,
-              [field]: value,
-            }
-          : e
-      )
-    );
-  }
-
-  function handleDownload() {
-    if (entries.length === 0) {
-      alert("No finance data to download.");
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!draft.label || !draft.month) {
+      alert("Please fill at least Title and Month.");
       return;
     }
 
-    const header = ["Month", "Income", "Expenses", "Net", "Notes"];
-    const rows = entries.map((e) => {
-      const income = parseMoney(e.income || "0");
-      const expenses = parseMoney(e.expenses || "0");
-      const net = income - expenses;
-      return [
-        e.month,
-        income.toString(),
-        expenses.toString(),
-        net.toString(),
-        (e.notes || "").replace(/[\r\n]+/g, " "),
-      ];
-    });
+    if (editingId == null) {
+      const newRow: FinanceRow = {
+        id: Date.now(),
+        ...draft,
+      };
+      setRows((prev) => [newRow, ...prev]);
+    } else {
+      setRows((prev) =>
+        prev.map((r) => (r.id === editingId ? { ...r, ...draft } : r))
+      );
+    }
 
-    const csv = [header, ...rows]
-      .map((row) => row.map((v) => `"${v}"`).join(","))
-      .join("\r\n");
-
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "Eventura_Finance_Report.csv";
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    resetDraft();
   }
+
+  function handleEdit(row: FinanceRow) {
+    setEditingId(row.id);
+    setDraft({
+      label: row.label,
+      month: row.month,
+      income: row.income,
+      expense: row.expense,
+      category: row.category,
+      notes: row.notes,
+    });
+  }
+
+  function handleDelete(id: number) {
+    if (!confirm("Delete this record?")) return;
+    setRows((prev) => prev.filter((r) => r.id !== id));
+    if (editingId === id) resetDraft();
+  }
+
+  function clearMonth(month: string) {
+    if (!confirm(`Clear all entries for ${month}?`)) return;
+    setRows((prev) => prev.filter((r) => r.month !== month));
+  }
+
+  /* ========= Calculations ========= */
+
+  const filteredRows = rows.filter((r) => {
+    const monthOk = selectedMonth ? r.month === selectedMonth : true;
+    const catOk =
+      filterCategory === "All" ? true : r.category === filterCategory;
+    return monthOk && catOk;
+  });
+
+  const summary = useMemo(() => {
+    let totalIncome = 0;
+    let totalExpense = 0;
+
+    for (const row of filteredRows) {
+      totalIncome += parseMoney(row.income || "0");
+      totalExpense += parseMoney(row.expense || "0");
+    }
+
+    const profit = totalIncome - totalExpense;
+    const margin = totalIncome
+      ? Math.round((profit / totalIncome) * 100)
+      : 0;
+
+    // category wise
+    const byCategory: Record<string, { income: number; expense: number }> = {};
+    for (const row of filteredRows) {
+      if (!byCategory[row.category]) {
+        byCategory[row.category] = { income: 0, expense: 0 };
+      }
+      byCategory[row.category].income += parseMoney(row.income || "0");
+      byCategory[row.category].expense += parseMoney(row.expense || "0");
+    }
+
+    return { totalIncome, totalExpense, profit, margin, byCategory };
+  }, [filteredRows]);
 
   if (!user) return null;
 
-  // summary numbers
-  let totalIncome = 0;
-  let totalExpenses = 0;
-  entries.forEach((e) => {
-    totalIncome += parseMoney(e.income || "0");
-    totalExpenses += parseMoney(e.expenses || "0");
-  });
-  const net = totalIncome - totalExpenses;
-  const margin = totalIncome > 0 ? (net / totalIncome) * 100 : 0;
+  const isCEO = user.role === "CEO";
 
   return (
     <main className="eventura-os">
@@ -197,72 +241,129 @@ export default function FinancePage() {
           {/* Header */}
           <div className="eventura-header-row">
             <div>
-              <h1 className="eventura-page-title">Finance & Auto Calculator</h1>
+              <h1 className="eventura-page-title">Finance Board</h1>
               <p className="eventura-subtitle">
-                Track Eventura income, expenses, and auto-calculated margins.
+                Track Eventura cashflow: client receipts, vendor payouts, salaries,
+                rent, marketing – all in one purple-black board.
               </p>
             </div>
             <div className="eventura-actions">
               <button
                 type="button"
                 className="eventura-button-secondary"
-                onClick={handleDownload}
+                onClick={resetDraft}
               >
-                ⬇ Download CSV
+                + New line
               </button>
             </div>
           </div>
 
-          {/* Summary row */}
-          <section className="eventura-kpi-row">
-            <div className="eventura-card">
-              <div className="eventura-card-label">Total income</div>
-              <div className="eventura-card-value">
-                ₹{formatCurrency(totalIncome)}
-              </div>
-              <div className="eventura-card-note">
-                Sum of all income entries
-              </div>
+          {/* Summary cards */}
+          <section className="eventura-grid">
+            <div className="eventura-card eventura-card-glow">
+              <p className="eventura-card-label">Total income</p>
+              <p className="eventura-card-value">
+                ₹{formatCurrency(summary.totalIncome)}
+              </p>
+              <p className="eventura-card-note">
+                All client & other inflows for selected filters.
+              </p>
             </div>
 
-            <div className="eventura-card">
-              <div className="eventura-card-label">Total expenses</div>
-              <div className="eventura-card-value">
-                ₹{formatCurrency(totalExpenses)}
-              </div>
-              <div className="eventura-card-note">
-                Vendor payouts, salaries, rent, etc.
-              </div>
+            <div className="eventura-card eventura-card-glow">
+              <p className="eventura-card-label">Total expense</p>
+              <p className="eventura-card-value">
+                ₹{formatCurrency(summary.totalExpense)}
+              </p>
+              <p className="eventura-card-note">
+                Vendor payouts, salaries, rent, marketing, travel.
+              </p>
             </div>
 
-            <div className="eventura-card">
-              <div className="eventura-card-label">Net & margin</div>
-              <div className="eventura-card-value">
-                ₹{formatCurrency(net)}
-              </div>
-              <div className="eventura-card-note">
-                Margin {margin ? margin.toFixed(1) : "–"}%
-              </div>
+            <div className="eventura-card eventura-card-glow">
+              <p className="eventura-card-label">Net profit</p>
+              <p
+                className="eventura-card-value"
+                style={{ color: summary.profit >= 0 ? "#4ade80" : "#f97373" }}
+              >
+                ₹{formatCurrency(summary.profit)}
+              </p>
+              <p className="eventura-card-note">
+                Margin: {summary.margin}%
+              </p>
             </div>
           </section>
 
-          {/* Main layout: left = data entry, right = table */}
-          <section className="eventura-columns" style={{ marginTop: "1.2rem" }}>
-            {/* Left: add / edit form */}
-            <div className="eventura-panel">
-              <h2 className="eventura-panel-title">
-                Add monthly finance record
-              </h2>
-              <p className="eventura-small-text">
-                Use one row per month or per event group. You can still edit
-                numbers directly in the table on the right.
-              </p>
+          {/* Filters */}
+          <section className="eventura-panel" style={{ marginBottom: "1rem" }}>
+            <h2 className="eventura-panel-title">Filters & month view</h2>
+            <div className="eventura-form-grid">
+              <div className="eventura-field">
+                <label className="eventura-label">Month</label>
+                <input
+                  type="month"
+                  className="eventura-input"
+                  value={selectedMonth}
+                  onChange={(e) => setSelectedMonth(e.target.value)}
+                />
+              </div>
+              <div className="eventura-field">
+                <label className="eventura-label">Category</label>
+                <select
+                  className="eventura-input"
+                  value={filterCategory}
+                  onChange={(e) => setFilterCategory(e.target.value)}
+                >
+                  <option value="All">All</option>
+                  <option>Client Payment</option>
+                  <option>Vendor Payment</option>
+                  <option>Salary</option>
+                  <option>Office & Rent</option>
+                  <option>Marketing</option>
+                  <option>Travel</option>
+                  <option>Investment</option>
+                  <option>Other</option>
+                </select>
+              </div>
+              {selectedMonth && (
+                <div className="eventura-field" style={{ alignSelf: "flex-end" }}>
+                  <button
+                    type="button"
+                    className="eventura-button-secondary"
+                    onClick={() => clearMonth(selectedMonth)}
+                  >
+                    Clear month
+                  </button>
+                </div>
+              )}
+            </div>
+          </section>
 
-              <form
-                className="eventura-form"
-                onSubmit={handleAddEntry}
-                style={{ marginTop: "0.7rem" }}
-              >
+          {/* Main 2-column: Auto calculator + table */}
+          <section
+            className="eventura-columns"
+            style={{
+              gridTemplateColumns: "minmax(0, 1.2fr) minmax(0, 2fr)",
+            }}
+          >
+            {/* Left: Auto calculator form */}
+            <div className="eventura-panel finance-panel-gradient">
+              <h2 className="eventura-panel-title">Add transaction</h2>
+              <form className="eventura-form" onSubmit={handleSubmit}>
+                <div className="eventura-field">
+                  <label className="eventura-label" htmlFor="label">
+                    Title
+                  </label>
+                  <input
+                    id="label"
+                    name="label"
+                    className="eventura-input"
+                    value={draft.label}
+                    onChange={handleDraftChange}
+                    placeholder="e.g. Mehta Wedding advance, Vendor payout, Office rent"
+                  />
+                </div>
+
                 <div className="eventura-form-grid">
                   <div className="eventura-field">
                     <label className="eventura-label" htmlFor="month">
@@ -278,6 +379,30 @@ export default function FinancePage() {
                     />
                   </div>
                   <div className="eventura-field">
+                    <label className="eventura-label" htmlFor="category">
+                      Category
+                    </label>
+                    <select
+                      id="category"
+                      name="category"
+                      className="eventura-input"
+                      value={draft.category}
+                      onChange={handleDraftChange}
+                    >
+                      <option>Client Payment</option>
+                      <option>Vendor Payment</option>
+                      <option>Salary</option>
+                      <option>Office & Rent</option>
+                      <option>Marketing</option>
+                      <option>Travel</option>
+                      <option>Investment</option>
+                      <option>Other</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="eventura-form-grid">
+                  <div className="eventura-field">
                     <label className="eventura-label" htmlFor="income">
                       Income (₹)
                     </label>
@@ -287,28 +412,25 @@ export default function FinancePage() {
                       className="eventura-input"
                       value={draft.income}
                       onChange={handleDraftChange}
-                      placeholder="e.g. 20,00,000"
+                      placeholder="Only numbers, no comma"
                     />
                   </div>
-                </div>
-
-                <div className="eventura-form-grid" style={{ marginTop: "0.5rem" }}>
                   <div className="eventura-field">
-                    <label className="eventura-label" htmlFor="expenses">
-                      Expenses (₹)
+                    <label className="eventura-label" htmlFor="expense">
+                      Expense (₹)
                     </label>
                     <input
-                      id="expenses"
-                      name="expenses"
+                      id="expense"
+                      name="expense"
                       className="eventura-input"
-                      value={draft.expenses}
+                      value={draft.expense}
                       onChange={handleDraftChange}
-                      placeholder="e.g. 13,50,000"
+                      placeholder="Vendor payout, salary etc."
                     />
                   </div>
                 </div>
 
-                <div className="eventura-field" style={{ marginTop: "0.5rem" }}>
+                <div className="eventura-field">
                   <label className="eventura-label" htmlFor="notes">
                     Notes
                   </label>
@@ -318,127 +440,147 @@ export default function FinancePage() {
                     className="eventura-textarea"
                     value={draft.notes}
                     onChange={handleDraftChange}
-                    placeholder="e.g. Includes 4 weddings in Surat + 1 corporate gala"
+                    placeholder="Vendor name, client, payment stage, anything important…"
                   />
                 </div>
 
-                <div className="eventura-actions" style={{ marginTop: "0.7rem" }}>
+                <div className="eventura-actions">
                   <button type="submit" className="eventura-button">
-                    Save record
+                    {editingId ? "Update line" : "Add line"}
                   </button>
+                  {editingId && (
+                    <button
+                      type="button"
+                      className="eventura-button-secondary"
+                      onClick={resetDraft}
+                    >
+                      Cancel edit
+                    </button>
+                  )}
                 </div>
               </form>
+
+              <div
+                className="eventura-panel"
+                style={{
+                  marginTop: "1rem",
+                  background:
+                    "radial-gradient(circle at top, rgba(168,85,247,0.35), rgba(15,23,42,0.95))",
+                }}
+              >
+                <h3 className="eventura-panel-title">
+                  Month snapshot (current filters)
+                </h3>
+                <ul className="eventura-bullets">
+                  <li>
+                    Gross inflow: ₹{formatCurrency(summary.totalIncome)}
+                  </li>
+                  <li>
+                    Gross outflow: ₹{formatCurrency(summary.totalExpense)}
+                  </li>
+                  <li>
+                    Net:{" "}
+                    <span
+                      style={{
+                        color: summary.profit >= 0 ? "#4ade80" : "#f97373",
+                      }}
+                    >
+                      ₹{formatCurrency(summary.profit)}
+                    </span>{" "}
+                    ({summary.margin}% margin)
+                  </li>
+                </ul>
+              </div>
             </div>
 
-            {/* Right: table & auto calculations */}
-            <div className="eventura-panel">
-              <h2 className="eventura-panel-title">
-                Finance table (auto net & margin)
-              </h2>
+            {/* Right: Table */}
+            <div className="eventura-panel finance-panel-gradient">
+              <h2 className="eventura-panel-title">Transactions</h2>
               <p className="eventura-small-text">
-                Edit any cell directly. Net and margin are calculated
-                automatically per row.
+                This table is saved in your browser. In future, we can sync with
+                real accounting (Zoho/QuickBooks) using Eventura ecosystem.
               </p>
 
-              <div className="eventura-table-wrapper" style={{ marginTop: "0.6rem" }}>
-                {entries.length === 0 ? (
-                  <p
-                    style={{
-                      fontSize: "0.8rem",
-                      color: "#9ca3af",
-                    }}
-                  >
-                    No finance records yet. Add at least one month on the left
-                    to see the auto calculator.
+              <div className="eventura-table-wrapper" style={{ marginTop: "0.5rem" }}>
+                {filteredRows.length === 0 ? (
+                  <p style={{ fontSize: "0.8rem", color: "#9ca3af" }}>
+                    No entries match this filter. Add a row on the left or reset
+                    filters.
                   </p>
                 ) : (
                   <table className="eventura-table">
                     <thead>
                       <tr>
                         <th>Month</th>
-                        <th>Income (₹)</th>
-                        <th>Expenses (₹)</th>
-                        <th>Net (₹)</th>
-                        <th>Margin %</th>
-                        <th>Notes</th>
+                        <th>Title</th>
+                        <th>Category</th>
+                        <th>Income</th>
+                        <th>Expense</th>
+                        <th>Net</th>
                         <th />
                       </tr>
                     </thead>
                     <tbody>
-                      {entries.map((e) => {
-                        const income = parseMoney(e.income || "0");
-                        const expenses = parseMoney(e.expenses || "0");
-                        const netRow = income - expenses;
-                        const marginRow =
-                          income > 0 ? (netRow / income) * 100 : 0;
-
+                      {filteredRows.map((row) => {
+                        const income = parseMoney(row.income || "0");
+                        const expense = parseMoney(row.expense || "0");
+                        const net = income - expense;
                         return (
-                          <tr key={e.id}>
+                          <tr key={row.id}>
                             <td>
-                              <input
-                                className="eventura-input"
-                                type="month"
-                                value={e.month}
-                                onChange={(ev) =>
-                                  handleInlineChange(
-                                    e.id,
-                                    "month",
-                                    ev.target.value
-                                  )
-                                }
-                              />
+                              {row.month
+                                ? row.month.replace("-", " / ")
+                                : "–"}
                             </td>
                             <td>
-                              <input
-                                className="eventura-input"
-                                value={e.income}
-                                onChange={(ev) =>
-                                  handleInlineChange(
-                                    e.id,
-                                    "income",
-                                    ev.target.value
-                                  )
-                                }
-                              />
+                              <div className="eventura-list-title">
+                                {row.label}
+                              </div>
+                              <div className="eventura-list-sub">
+                                {row.notes || "No notes"}
+                              </div>
+                            </td>
+                            <td>{row.category}</td>
+                            <td>
+                              {income
+                                ? `₹${formatCurrency(income)}`
+                                : "–"}
                             </td>
                             <td>
-                              <input
-                                className="eventura-input"
-                                value={e.expenses}
-                                onChange={(ev) =>
-                                  handleInlineChange(
-                                    e.id,
-                                    "expenses",
-                                    ev.target.value
-                                  )
-                                }
-                              />
+                              {expense
+                                ? `₹${formatCurrency(expense)}`
+                                : "–"}
                             </td>
-                            <td>₹{formatCurrency(netRow)}</td>
-                            <td>
-                              {marginRow ? marginRow.toFixed(1) : "–"}%
+                            <td
+                              style={{
+                                color: net >= 0 ? "#4ade80" : "#f97373",
+                              }}
+                            >
+                              {net ? `₹${formatCurrency(net)}` : "–"}
                             </td>
                             <td>
-                              <input
-                                className="eventura-input"
-                                value={e.notes}
-                                onChange={(ev) =>
-                                  handleInlineChange(
-                                    e.id,
-                                    "notes",
-                                    ev.target.value
-                                  )
-                                }
-                              />
-                            </td>
-                            <td>
-                              <button
-                                type="button"
-                                className="eventura-tag eventura-tag-amber"
-                                onClick={() => handleDeleteEntry(e.id)}
+                              <div
+                                style={{
+                                  display: "flex",
+                                  gap: "0.3rem",
+                                  justifyContent: "flex-end",
+                                }}
                               >
-                                Delete
-                              </button>
+                                <button
+                                  type="button"
+                                  className="eventura-tag eventura-tag-blue"
+                                  onClick={() => handleEdit(row)}
+                                >
+                                  Edit
+                                </button>
+                                <button
+                                  type="button"
+                                  className="eventura-tag eventura-tag-amber"
+                                  onClick={() => handleDelete(row.id)}
+                                >
+                                  Delete
+                                </button>
+                              </div>
                             </td>
                           </tr>
                         );
@@ -450,18 +592,55 @@ export default function FinancePage() {
             </div>
           </section>
 
-          <footer className="eventura-footer">
-            Eventura · Finance & Strategy · © {new Date().getFullYear()}
-          </footer>
+          {/* Category breakdown */}
+          <section className="eventura-panel" style={{ marginTop: "1rem" }}>
+            <h2 className="eventura-panel-title">Category breakdown</h2>
+            <div
+              className="eventura-grid"
+              style={{ gridTemplateColumns: "repeat(auto-fit, minmax(180px,1fr))" }}
+            >
+              {Object.entries(summary.byCategory).map(
+                ([cat, { income, expense }]) => {
+                  const net = income - expense;
+                  return (
+                    <div key={cat} className="eventura-card">
+                      <p className="eventura-card-label">{cat}</p>
+                      <p className="eventura-card-note">
+                        Income: ₹{formatCurrency(income)}
+                      </p>
+                      <p className="eventura-card-note">
+                        Expense: ₹{formatCurrency(expense)}
+                      </p>
+                      <p
+                        className="eventura-card-note"
+                        style={{
+                          color: net >= 0 ? "#4ade80" : "#f97373",
+                          marginTop: "0.4rem",
+                        }}
+                      >
+                        Net: ₹{formatCurrency(net)}
+                      </p>
+                    </div>
+                  );
+                }
+              )}
+              {Object.keys(summary.byCategory).length === 0 && (
+                <p style={{ fontSize: "0.8rem", color: "#9ca3af" }}>
+                  Add some data to see category-wise breakdown.
+                </p>
+              )}
+            </div>
+          </section>
         </div>
       </div>
     </main>
   );
 }
 
-/* Shared layout bits (same classes as other pages) */
+/* ========= Common layout components (same style as other tabs) ========= */
 
 function SidebarCore({ user, active }: { user: User; active: string }) {
+  const isCEO = user.role === "CEO";
   return (
     <>
       <div className="eventura-sidebar-header">
@@ -504,12 +683,14 @@ function SidebarCore({ user, active }: { user: User; active: string }) {
           icon="🤝"
           active={active === "vendors"}
         />
-        <SidebarLink
-          href="/finance"
-          label="Finance"
-          icon="💰"
-          active={active === "finance"}
-        />
+        {isCEO && (
+          <SidebarLink
+            href="/finance"
+            label="Finance"
+            icon="💰"
+            active={active === "finance"}
+          />
+        )}
         <SidebarLink
           href="/hr"
           label="HR & Team"
@@ -522,18 +703,22 @@ function SidebarCore({ user, active }: { user: User; active: string }) {
           icon="📦"
           active={active === "inventory"}
         />
-        <SidebarLink
-          href="/reports"
-          label="Reports & Analytics"
-          icon="📈"
-          active={active === "reports"}
-        />
-        <SidebarLink
-          href="/settings"
-          label="Settings & Access"
-          icon="⚙️"
-          active={active === "settings"}
-        />
+        {isCEO && (
+          <SidebarLink
+            href="/reports"
+            label="Reports & Analytics"
+            icon="📈"
+            active={active === "reports"}
+          />
+        )}
+        {isCEO && (
+          <SidebarLink
+            href="/settings"
+            label="Settings & Access"
+            icon="⚙️"
+            active={active === "settings"}
+          />
+        )}
       </nav>
       <div className="eventura-sidebar-footer">
         <div className="eventura-sidebar-role">
@@ -554,7 +739,7 @@ function TopbarCore({ user }: { user: User }) {
       <div className="eventura-topbar-center">
         <input
           className="eventura-search"
-          placeholder="Search events, clients, vendors..."
+          placeholder="Search events, finance, vendors..."
         />
       </div>
       <div className="eventura-topbar-right">
