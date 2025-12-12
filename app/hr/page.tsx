@@ -9,6 +9,9 @@ type Role = "CEO" | "Staff";
 type User = { name: string; role: Role; city: string };
 
 const USER_KEY = "eventura-user";
+const TEAM_STORAGE_KEY = "eventura-team";
+const CANDIDATE_STORAGE_KEY = "eventura-candidates";
+const TRAINING_STORAGE_KEY = "eventura-training";
 
 type StaffRole =
   | "Event Manager"
@@ -60,6 +63,17 @@ type TrainingItem = {
   status: "Planned" | "In Progress" | "Completed";
   beforeScore: number;
   afterScore?: number;
+};
+
+type HRSummary = {
+  coreCount: number;
+  freelancersCount: number;
+  traineesCount: number;
+  totalCost: number;
+  avgWorkload: number;
+  roleCounts: Record<StaffRole, number>;
+  weddingsCapacity: number;
+  corporatesCapacity: number;
 };
 
 /* ========= Seed data ========= */
@@ -263,9 +277,9 @@ function workloadLabel(value: number): string {
 
 export default function HRPage() {
   const [user, setUser] = useState<User | null>(null);
-  const [team] = useState<TeamMember[]>(seedTeam);
-  const [candidates] = useState<Candidate[]>(seedCandidates);
-  const [training] = useState<TrainingItem[]>(seedTraining);
+  const [team, setTeam] = useState<TeamMember[]>(seedTeam);
+  const [candidates, setCandidates] = useState<Candidate[]>(seedCandidates);
+  const [training, setTraining] = useState<TrainingItem[]>(seedTraining);
 
   // Simple view switch inside HR tab
   const [view, setView] = useState<"home" | "scheduling" | "hiring" | "training">(
@@ -289,7 +303,60 @@ export default function HRPage() {
     }
   }, []);
 
-  const summary = useMemo(() => {
+  // Load saved HR data from localStorage (if any)
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const storedTeam = window.localStorage.getItem(TEAM_STORAGE_KEY);
+      if (storedTeam) {
+        const parsed: TeamMember[] = JSON.parse(storedTeam);
+        if (Array.isArray(parsed)) setTeam(parsed);
+      }
+    } catch {
+      // ignore
+    }
+    try {
+      const storedCandidates = window.localStorage.getItem(
+        CANDIDATE_STORAGE_KEY
+      );
+      if (storedCandidates) {
+        const parsed: Candidate[] = JSON.parse(storedCandidates);
+        if (Array.isArray(parsed)) setCandidates(parsed);
+      }
+    } catch {
+      // ignore
+    }
+    try {
+      const storedTraining = window.localStorage.getItem(TRAINING_STORAGE_KEY);
+      if (storedTraining) {
+        const parsed: TrainingItem[] = JSON.parse(storedTraining);
+        if (Array.isArray(parsed)) setTraining(parsed);
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  // Persist HR data when it changes
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(TEAM_STORAGE_KEY, JSON.stringify(team));
+  }, [team]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(
+      CANDIDATE_STORAGE_KEY,
+      JSON.stringify(candidates)
+    );
+  }, [candidates]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(TRAINING_STORAGE_KEY, JSON.stringify(training));
+  }, [training]);
+
+  const summary: HRSummary = useMemo(() => {
     const core = team.filter((m) => m.status === "Core");
     const freelancers = team.filter((m) => m.status === "Freelancer");
     const trainees = team.filter((m) => m.status === "Trainee");
@@ -317,7 +384,6 @@ export default function HRPage() {
       roleCounts[m.role] = (roleCounts[m.role] || 0) + 1;
     });
 
-    // Rough capacity from core staff
     const eventManagers = core.filter((m) => m.role === "Event Manager").length;
     const decor = core.filter((m) => m.role === "Decor Specialist").length;
     const logistics = core.filter((m) => m.role === "Logistics").length;
@@ -419,13 +485,22 @@ export default function HRPage() {
           </div>
 
           {view === "home" && (
-            <HRHomeView summary={summary} team={team} isCEO={isCEO} />
+            <HRHomeView
+              summary={summary}
+              team={team}
+              isCEO={isCEO}
+              onTeamChange={setTeam}
+            />
           )}
           {view === "scheduling" && (
             <HRSchedulingView team={team} summary={summary} />
           )}
           {view === "hiring" && (
-            <HRHiringView candidates={candidates} team={team} />
+            <HRHiringView
+              candidates={candidates}
+              team={team}
+              onCandidatesChange={setCandidates}
+            />
           )}
           {view === "training" && (
             <HRTrainingView training={training} team={team} />
@@ -442,34 +517,13 @@ function HRHomeView({
   summary,
   team,
   isCEO,
+  onTeamChange,
 }: {
-  summary: ReturnType<typeof computeSummaryDummy>;
+  summary: HRSummary;
   team: TeamMember[];
   isCEO: boolean;
+  onTeamChange: (next: TeamMember[]) => void;
 }) {
-  // Type helper: we call computeSummaryDummy only for type, actual summary is from useMemo
-  function computeSummaryDummy() {
-    return {
-      coreCount: 0,
-      freelancersCount: 0,
-      traineesCount: 0,
-      totalCost: 0,
-      avgWorkload: 0,
-      roleCounts: {
-        "Event Manager": 0,
-        "Decor Specialist": 0,
-        Logistics: 0,
-        Marketing: 0,
-        Sales: 0,
-        Accountant: 0,
-        Operations: 0,
-      } as Record<StaffRole, number>,
-      weddingsCapacity: 0,
-      corporatesCapacity: 0,
-    };
-  }
-
-  // Find role-level workload “heatmap”
   const roles: StaffRole[] = [
     "Event Manager",
     "Decor Specialist",
@@ -497,6 +551,55 @@ function HRHomeView({
       avgWorkload: Math.round(avg),
     };
   });
+
+  const handleRemoveMember = (id: number) => {
+    if (!window.confirm("Remove this team member from HR?")) return;
+    onTeamChange(team.filter((m) => m.id !== id));
+  };
+
+  const handleAddMember = () => {
+    const name = window.prompt("New member name:");
+    if (!name) return;
+    const city = window.prompt("City:", "Surat") || "Surat";
+    const role = (window.prompt(
+      'Role (Event Manager / Decor Specialist / Logistics / Marketing / Sales / Accountant / Operations):',
+      "Event Manager"
+    ) || "Event Manager") as StaffRole;
+    const status = (window.prompt(
+      "Status (Core / Freelancer / Trainee):",
+      "Core"
+    ) || "Core") as StaffStatus;
+    const monthlySalary = Number(
+      window.prompt("Monthly salary (₹):", status === "Freelancer" ? "0" : "30000")
+    );
+    const workload = Number(window.prompt("Workload %:", "50"));
+    const eventsThisMonth = Number(
+      window.prompt("Events this month:", "0")
+    );
+    const rating = Number(window.prompt("Rating (1–5):", "4"));
+    const skillsRaw =
+      window.prompt("Skills (comma separated):", "Coordination") || "";
+    const skills = skillsRaw
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    const maxId = team.reduce((max, m) => Math.max(max, m.id), 0);
+    const newMember: TeamMember = {
+      id: maxId + 1,
+      name,
+      role,
+      city,
+      status,
+      monthlySalary: isNaN(monthlySalary) ? 0 : monthlySalary,
+      workload: isNaN(workload) ? 0 : workload,
+      eventsThisMonth: isNaN(eventsThisMonth) ? 0 : eventsThisMonth,
+      rating: isNaN(rating) ? 4 : rating,
+      skills: skills.length ? skills : ["General"],
+    };
+
+    onTeamChange([...team, newMember]);
+  };
 
   return (
     <>
@@ -606,6 +709,67 @@ function HRHomeView({
           )}
         </div>
       </section>
+
+      {/* Team directory – manage */}
+      <section className="eventura-panel" style={{ marginTop: "1.5rem" }}>
+        <div className="eventura-panel-header-row">
+          <h2 className="eventura-panel-title">Team directory (manage)</h2>
+          <button
+            type="button"
+            className="eventura-button-secondary"
+            onClick={handleAddMember}
+          >
+            + Add member
+          </button>
+        </div>
+        <div className="eventura-table-wrapper">
+          <table className="eventura-table">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Role</th>
+                <th>Status</th>
+                <th>City</th>
+                <th>Salary (₹)</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {team.map((m) => (
+                <tr key={m.id}>
+                  <td>
+                    <div className="eventura-list-title">{m.name}</div>
+                    <div className="eventura-list-sub">
+                      {m.workload}% · {workloadLabel(m.workload)}
+                    </div>
+                  </td>
+                  <td>{m.role}</td>
+                  <td>{m.status}</td>
+                  <td>{m.city}</td>
+                  <td>{m.monthlySalary.toLocaleString("en-IN")}</td>
+                  <td style={{ textAlign: "right" }}>
+                    <button
+                      type="button"
+                      className="eventura-tag eventura-tag-amber"
+                      onClick={() => handleRemoveMember(m.id)}
+                    >
+                      Remove
+                    </button>
+                  </td>
+                </tr>
+              ))}
+              {team.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="eventura-small-text">
+                    No team members yet. Click “Add member” to create your HR
+                    list.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
     </>
   );
 }
@@ -615,13 +779,7 @@ function HRSchedulingView({
   summary,
 }: {
   team: TeamMember[];
-  summary: {
-    weddingsCapacity: number;
-    corporatesCapacity: number;
-    coreCount: number;
-    freelancersCount: number;
-    traineesCount: number;
-  };
+  summary: HRSummary;
 }) {
   // Dummy schedule of next 7–10 days
   const schedule = [
@@ -777,9 +935,11 @@ function HRSchedulingView({
 function HRHiringView({
   candidates,
   team,
+  onCandidatesChange,
 }: {
   candidates: Candidate[];
   team: TeamMember[];
+  onCandidatesChange: (next: Candidate[]) => void;
 }) {
   const stages: HiringStage[] = [
     "Sourced",
@@ -808,10 +968,55 @@ function HRHiringView({
     return map;
   }, [team]);
 
+  const handleRemoveCandidate = (id: number) => {
+    if (!window.confirm("Remove this candidate from pipeline?")) return;
+    onCandidatesChange(candidates.filter((c) => c.id !== id));
+  };
+
+  const handleAddCandidate = () => {
+    const name = window.prompt("Candidate name:");
+    if (!name) return;
+    const role = (window.prompt(
+      'Role (Event Manager / Decor Specialist / Logistics / Marketing / Sales / Accountant / Operations):',
+      "Event Manager"
+    ) || "Event Manager") as StaffRole;
+    const city = window.prompt("City:", "Surat") || "Surat";
+    const expectedSalary = Number(
+      window.prompt("Expected salary (₹):", "30000")
+    );
+    const stage = (window.prompt(
+      "Stage (Sourced / Shortlisted / Interviewed / Trial Event / Hired / Rejected):",
+      "Sourced"
+    ) || "Sourced") as HiringStage;
+    const fitScore = Number(window.prompt("Fit score (0–100):", "75"));
+
+    const maxId = candidates.reduce((max, c) => Math.max(max, c.id), 100);
+    const newCandidate: Candidate = {
+      id: maxId + 1,
+      name,
+      role,
+      city,
+      expectedSalary: isNaN(expectedSalary) ? 0 : expectedSalary,
+      stage,
+      fitScore: isNaN(fitScore) ? 70 : fitScore,
+    };
+
+    onCandidatesChange([...candidates, newCandidate]);
+  };
+
   return (
     <section className="eventura-columns">
       <div className="eventura-panel">
-        <h2 className="eventura-panel-title">Recruitment Kanban</h2>
+        <div className="eventura-panel-header-row">
+          <h2 className="eventura-panel-title">Recruitment Kanban</h2>
+          <button
+            type="button"
+            className="eventura-button-secondary"
+            onClick={handleAddCandidate}
+          >
+            + Add candidate
+          </button>
+        </div>
         <div
           className="eventura-grid"
           style={{ gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))" }}
@@ -848,6 +1053,19 @@ function HRHiringView({
                       >
                         {c.fitScore} fit
                       </span>
+                      <button
+                        type="button"
+                        style={{
+                          marginLeft: "0.5rem",
+                          fontSize: "0.7rem",
+                          border: "none",
+                          background: "transparent",
+                          cursor: "pointer",
+                        }}
+                        onClick={() => handleRemoveCandidate(c.id)}
+                      >
+                        ❌
+                      </button>
                     </li>
                   ))}
                 </ul>
