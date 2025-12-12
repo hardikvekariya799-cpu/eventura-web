@@ -1,144 +1,195 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+
+/* ========= Shared types ========= */
 
 type Role = "CEO" | "Staff";
 type User = { name: string; role: Role; city: string };
 
-type EventStatus =
-  | "New Lead"
+const USER_KEY = "eventura-user";
+
+type EventStage =
+  | "Lead"
   | "Proposal Sent"
   | "Negotiation"
   | "Confirmed"
-  | "Planning"
-  | "In Execution"
-  | "Completed"
-  | "Cancelled";
+  | "Completed";
 
-type EventType = "Wedding" | "Corporate" | "Party" | "Festival" | "Other";
+type EventType = "Wedding" | "Corporate" | "Social";
 
-type EventItem = {
+type PipelineEvent = {
   id: number;
-  clientName: string;
-  eventName: string;
-  eventType: EventType;
+  name: string;
+  client: string;
+  type: EventType;
   city: string;
-  venue: string;
-  date: string;
-  guests: string;
-  budget: string;
-  status: EventStatus;
+  date: string; // YYYY-MM-DD
+  stage: EventStage;
+  value: number; // ₹
+  probability: number; // 0–1
 };
 
-type FinanceEntry = {
-  id: number;
+type MonthlyKPI = {
   month: string;
-  income: string;
-  expenses: string;
-  notes: string;
+  revenue: number;
+  profitMargin: number; // %
+  eventsCount: number;
 };
 
-const USER_KEY = "eventura-user";
-const EVENTS_KEY = "eventura-events";
-const FINANCE_KEY = "eventura-finance";
+type HRKPI = {
+  hrCost: number;
+  revenue: number;
+  coreStaff: number;
+  freelancers: number;
+};
 
-function parseMoney(value: string): number {
-  const cleaned = value.replace(/[₹, ]/g, "");
-  const n = parseFloat(cleaned);
-  return isNaN(n) ? 0 : n;
+type LeadSource = {
+  channel: string;
+  leads: number;
+  conversionRate: number; // %
+};
+
+/* ========= Seed / sample data (CEO view) ========= */
+
+const pipeline: PipelineEvent[] = [
+  {
+    id: 1,
+    name: "Patel – Royal Wedding",
+    client: "Patel Family",
+    type: "Wedding",
+    city: "Surat",
+    date: "2026-01-10",
+    stage: "Negotiation",
+    value: 1800000,
+    probability: 0.7,
+  },
+  {
+    id: 2,
+    name: "XYZ Textiles – Annual Gala",
+    client: "XYZ Textiles",
+    type: "Corporate",
+    city: "Surat",
+    date: "2026-02-05",
+    stage: "Proposal Sent",
+    value: 950000,
+    probability: 0.6,
+  },
+  {
+    id: 3,
+    name: "Mehta – Engagement",
+    client: "Mehta Family",
+    type: "Wedding",
+    city: "Surat",
+    date: "2025-12-18",
+    stage: "Confirmed",
+    value: 650000,
+    probability: 0.95,
+  },
+  {
+    id: 4,
+    name: "Social – Sangeet Night",
+    client: "Shah Family",
+    type: "Social",
+    city: "Surat",
+    date: "2025-12-28",
+    stage: "Lead",
+    value: 300000,
+    probability: 0.4,
+  },
+];
+
+const monthlyKPI: MonthlyKPI[] = [
+  { month: "Aug", revenue: 850000, profitMargin: 32, eventsCount: 5 },
+  { month: "Sep", revenue: 1200000, profitMargin: 35, eventsCount: 7 },
+  { month: "Oct", revenue: 1850000, profitMargin: 38, eventsCount: 9 },
+  { month: "Nov", revenue: 2100000, profitMargin: 41, eventsCount: 10 },
+  { month: "Dec", revenue: 1950000, profitMargin: 39, eventsCount: 8 },
+];
+
+const hrKPI: HRKPI = {
+  hrCost: 248000, // monthly
+  revenue: 1950000, // monthly
+  coreStaff: 7,
+  freelancers: 2,
+};
+
+const leadSources: LeadSource[] = [
+  { channel: "Instagram", leads: 48, conversionRate: 18 },
+  { channel: "Referral", leads: 21, conversionRate: 42 },
+  { channel: "Venue Partner", leads: 12, conversionRate: 36 },
+  { channel: "WhatsApp / Direct", leads: 9, conversionRate: 55 },
+];
+
+/* ========= Helper functions ========= */
+
+function formatINR(value: number): string {
+  return "₹" + value.toLocaleString("en-IN");
 }
 
-function formatCurrency(value: number): string {
-  return value.toLocaleString("en-IN", {
-    maximumFractionDigits: 0,
-  });
+function gaugeColor(value: number): string {
+  if (value < 60) return "eventura-tag-amber";
+  if (value <= 80) return "eventura-tag-blue";
+  return "eventura-tag-green";
 }
+
+/* ========= Page ========= */
 
 export default function DashboardPage() {
   const [user, setUser] = useState<User | null>(null);
-  const [events, setEvents] = useState<EventItem[]>([]);
-  const [finance, setFinance] = useState<FinanceEntry[]>([]);
 
+  // Auth same as HR
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const rawUser = window.localStorage.getItem(USER_KEY);
-    if (!rawUser) {
+    const raw = window.localStorage.getItem(USER_KEY);
+    if (!raw) {
       window.location.href = "/login";
       return;
     }
     try {
-      const u: User = JSON.parse(rawUser);
+      const u: User = JSON.parse(raw);
       setUser(u);
     } catch {
       window.localStorage.removeItem(USER_KEY);
       window.location.href = "/login";
-      return;
-    }
-
-    const rawEvents = window.localStorage.getItem(EVENTS_KEY);
-    if (rawEvents) {
-      try {
-        setEvents(JSON.parse(rawEvents));
-      } catch {
-        // ignore
-      }
-    }
-    const rawFinance = window.localStorage.getItem(FINANCE_KEY);
-    if (rawFinance) {
-      try {
-        setFinance(JSON.parse(rawFinance));
-      } catch {
-        // ignore
-      }
     }
   }, []);
 
+  const {
+    mrr,
+    avgMargin,
+    eventsThisMonth,
+    projectedRevenue,
+    weightedPipeline,
+  } = useMemo(() => {
+    const latest = monthlyKPI[monthlyKPI.length - 1];
+
+    const mrr = latest.revenue;
+    const avgMargin =
+      monthlyKPI.reduce((sum, m) => sum + m.profitMargin, 0) /
+      monthlyKPI.length;
+    const eventsThisMonth = latest.eventsCount;
+
+    const weightedPipeline = pipeline.reduce(
+      (sum, e) => sum + e.value * e.probability,
+      0
+    );
+
+    const projectedRevenue = mrr + weightedPipeline;
+
+    return {
+      mrr,
+      avgMargin: Math.round(avgMargin),
+      eventsThisMonth,
+      projectedRevenue,
+      weightedPipeline,
+    };
+  }, []);
+
+  const isCEO = user?.role === "CEO";
+
   if (!user) return null;
-
-  // === EVENT PIPELINE ===
-  const now = new Date();
-  const currentMonth = now.getMonth();
-  const currentYear = now.getFullYear();
-
-  const eventsThisMonth = events.filter((ev) => {
-    if (!ev.date) return false;
-    const d = new Date(ev.date);
-    return d.getMonth() === currentMonth && d.getFullYear() === currentYear;
-  });
-
-  const countByStatus = (statuses: EventStatus[]) =>
-    events.filter((ev) => statuses.includes(ev.status)).length;
-
-  const pipelineCounts = {
-    leads: countByStatus(["New Lead", "Proposal Sent", "Negotiation"]),
-    confirmed: countByStatus(["Confirmed"]),
-    planning: countByStatus(["Planning"]),
-    execution: countByStatus(["In Execution"]),
-    completed: countByStatus(["Completed"]),
-  };
-
-  // === FINANCE SNAPSHOT ===
-  let totalIncome = 0;
-  let totalExpenses = 0;
-  finance.forEach((f) => {
-    totalIncome += parseMoney(f.income || "0");
-    totalExpenses += parseMoney(f.expenses || "0");
-  });
-  const net = totalIncome - totalExpenses;
-  const margin = totalIncome > 0 ? (net / totalIncome) * 100 : 0;
-
-  // Next 7 days events
-  const upcoming7 = events
-    .filter((ev) => ev.date)
-    .map((ev) => ({ ...ev, dateObj: new Date(ev.date) }))
-    .filter((ev) => {
-      const diff =
-        (ev.dateObj.getTime() - now.getTime()) / (1000 * 60 * 60 * 24);
-      return diff >= 0 && diff <= 7;
-    })
-    .sort((a, b) => a.dateObj.getTime() - b.dateObj.getTime())
-    .slice(0, 5);
 
   return (
     <main className="eventura-os">
@@ -153,173 +204,283 @@ export default function DashboardPage() {
           {/* Header */}
           <div className="eventura-header-row">
             <div>
-              <h1 className="eventura-page-title">CEO Dashboard</h1>
+              <h1 className="eventura-page-title">CEO Command Center</h1>
               <p className="eventura-subtitle">
-                Snapshot of Eventura pipeline, revenue and upcoming events.
+                One view of revenue, pipeline, HR cost, and event capacity for
+                Eventura – tuned for fast decisions.
               </p>
             </div>
-            <div className="eventura-actions">
-              <Link href="/events" className="eventura-button">
-                + New Event
+            <div className="eventura-chips-row">
+              <Link href="/events" className="eventura-tag eventura-tag-blue">
+                🎉 Open Events
+              </Link>
+              <Link href="/finance" className="eventura-tag eventura-tag-amber">
+                💰 Open Finance
+              </Link>
+              <Link href="/hr" className="eventura-tag eventura-tag-green">
+                🧑‍💼 HR & Crew
               </Link>
             </div>
           </div>
 
-          {/* TOP KPI CARDS */}
-          <section className="eventura-kpi-row">
-            <div className="eventura-card">
-              <div className="eventura-card-label">Events this month</div>
-              <div className="eventura-card-value">
-                {eventsThisMonth.length}
+          {/* Top KPI row */}
+          <section className="eventura-grid">
+            <div className="eventura-card eventura-card-glow">
+              <p className="eventura-card-label">This month revenue</p>
+              <p className="eventura-card-value">{formatINR(mrr)}</p>
+              <p className="eventura-card-note">
+                Based on confirmed & completed events in the last 30–31 days.
+              </p>
+            </div>
+            <div className="eventura-card eventura-card-glow">
+              <p className="eventura-card-label">Avg profit margin</p>
+              <p className="eventura-card-value">{avgMargin}%</p>
+              <p className="eventura-card-note">
+                Across last 5 months – target 40–45% on weddings.
+              </p>
+            </div>
+            <div className="eventura-card eventura-card-glow">
+              <p className="eventura-card-label">Events this month</p>
+              <p className="eventura-card-value">{eventsThisMonth}</p>
+              <p className="eventura-card-note">
+                Mix of weddings, corporates & socials (see Events tab).
+              </p>
+            </div>
+            <div className="eventura-card eventura-card-glow">
+              <p className="eventura-card-label">Projected revenue</p>
+              <p className="eventura-card-value">
+                {formatINR(Math.round(projectedRevenue))}
+              </p>
+              <p className="eventura-card-note">
+                Confirmed + weighted pipeline (probability-adjusted).
+              </p>
+            </div>
+          </section>
+
+          {/* Revenue trend + HR vs Revenue */}
+          <section className="eventura-columns">
+            <div className="eventura-panel">
+              <h2 className="eventura-panel-title">
+                Monthly revenue & events trend
+              </h2>
+              <div className="eventura-table-wrapper">
+                <table className="eventura-table">
+                  <thead>
+                    <tr>
+                      <th>Month</th>
+                      <th>Revenue</th>
+                      <th>Profit margin</th>
+                      <th>Events</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {monthlyKPI.map((m) => (
+                      <tr key={m.month}>
+                        <td>{m.month}</td>
+                        <td>{formatINR(m.revenue)}</td>
+                        <td>
+                          <span
+                            className={
+                              "eventura-tag " +
+                              (m.profitMargin >= 40
+                                ? "eventura-tag-green"
+                                : m.profitMargin >= 32
+                                ? "eventura-tag-blue"
+                                : "eventura-tag-amber")
+                            }
+                          >
+                            {m.profitMargin}%
+                          </span>
+                        </td>
+                        <td>{m.eventsCount}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
-              <div className="eventura-card-note">
-                Based on event dates in Events module
-              </div>
+              <p className="eventura-small-text" style={{ marginTop: "0.5rem" }}>
+                You can mirror these numbers with your real Tally / accounting
+                later from the Finance tab.
+              </p>
             </div>
 
-            <div className="eventura-card">
-              <div className="eventura-card-label">Total income (all time)</div>
-              <div className="eventura-card-value">
-                ₹{formatCurrency(totalIncome)}
-              </div>
-              <div className="eventura-card-note">
-                From Finance → Income records
-              </div>
-            </div>
-
-            <div className="eventura-card">
-              <div className="eventura-card-label">Net cash (all time)</div>
-              <div className="eventura-card-value">
-                ₹{formatCurrency(net)}
-              </div>
-              <div className="eventura-card-note">
-                Margin {margin ? margin.toFixed(1) : "–"}%
+            <div className="eventura-panel">
+              <h2 className="eventura-panel-title">HR cost vs revenue</h2>
+              <ul className="eventura-bullets">
+                <li>Monthly HR cost: {formatINR(hrKPI.hrCost)}</li>
+                <li>Revenue this month: {formatINR(hrKPI.revenue)}</li>
+                <li>
+                  HR as % of revenue:{" "}
+                  {((hrKPI.hrCost / hrKPI.revenue) * 100).toFixed(1)}%
+                </li>
+                <li>
+                  Core staff: {hrKPI.coreStaff} · Freelancers:{" "}
+                  {hrKPI.freelancers}
+                </li>
+              </ul>
+              <p className="eventura-small-text">
+                Ideal HR cost for Eventura: keep below ~20% of revenue at early
+                stage and add freelancers during peaks.
+              </p>
+              <div className="eventura-actions" style={{ marginTop: "0.8rem" }}>
+                <Link href="/hr" className="eventura-button-secondary">
+                  Open HR & Crew dashboard
+                </Link>
               </div>
             </div>
           </section>
 
-          {/* PIPELINE + UPCOMING */}
-          <section className="eventura-columns" style={{ marginTop: "1.2rem" }}>
-            {/* Pipeline */}
+          {/* Pipeline & Leads */}
+          <section className="eventura-columns">
             <div className="eventura-panel">
-              <h2 className="eventura-panel-title">Event pipeline</h2>
-              <p className="eventura-small-text">
-                Live counts directly from event statuses.
-              </p>
-              <div className="pipeline-row">
-                <PipelineStage
-                  label="Leads"
-                  count={pipelineCounts.leads}
-                  helper="New Lead · Proposal · Negotiation"
-                />
-                <PipelineStage
-                  label="Confirmed"
-                  count={pipelineCounts.confirmed}
-                  helper="Client confirmed"
-                />
-                <PipelineStage
-                  label="Planning"
-                  count={pipelineCounts.planning}
-                  helper="Planning & vendor mapping"
-                />
-                <PipelineStage
-                  label="Execution"
-                  count={pipelineCounts.execution}
-                  helper="In Execution"
-                />
-                <PipelineStage
-                  label="Completed"
-                  count={pipelineCounts.completed}
-                  helper="Closed events"
-                />
+              <h2 className="eventura-panel-title">
+                Event pipeline – next 60–90 days
+              </h2>
+              <div className="eventura-table-wrapper">
+                <table className="eventura-table">
+                  <thead>
+                    <tr>
+                      <th>Event</th>
+                      <th>Client</th>
+                      <th>Date</th>
+                      <th>Type</th>
+                      <th>Stage</th>
+                      <th>Value</th>
+                      <th>Weighted</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pipeline.map((e) => (
+                      <tr key={e.id}>
+                        <td>
+                          <div className="eventura-list-title">{e.name}</div>
+                          <div className="eventura-list-sub">{e.city}</div>
+                        </td>
+                        <td>{e.client}</td>
+                        <td>{e.date}</td>
+                        <td>{e.type}</td>
+                        <td>
+                          <span className="eventura-tag eventura-tag-blue">
+                            {e.stage}
+                          </span>
+                        </td>
+                        <td>{formatINR(e.value)}</td>
+                        <td>
+                          <span className="eventura-small-text">
+                            {formatINR(Math.round(e.value * e.probability))}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
-            </div>
-
-            {/* Upcoming */}
-            <div className="eventura-panel">
-              <h2 className="eventura-panel-title">Next 7 days</h2>
-              <p className="eventura-small-text">
-                Events from Events module with dates in the next week.
+              <p className="eventura-small-text" style={{ marginTop: "0.5rem" }}>
+                “Weighted” is value × probability – this is what you can expect
+                if the pipeline behaves normally.
               </p>
-              {upcoming7.length === 0 ? (
-                <p
-                  style={{
-                    fontSize: "0.8rem",
-                    color: "#9ca3af",
-                    marginTop: "0.5rem",
-                  }}
-                >
-                  No events in the next 7 days.
-                </p>
-              ) : (
-                <ul className="eventura-list" style={{ marginTop: "0.5rem" }}>
-                  {upcoming7.map((ev) => (
-                    <li key={ev.id} className="eventura-list-item">
-                      <div>
-                        <div className="eventura-list-title">
-                          {ev.eventName}
-                        </div>
-                        <div className="eventura-list-sub">
-                          {ev.clientName} · {ev.city} ·{" "}
-                          {ev.dateObj.toLocaleDateString("en-IN")} ·{" "}
-                          {ev.venue}
-                        </div>
-                      </div>
-                      <span className="eventura-tag eventura-tag-blue">
-                        {ev.status}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          </section>
-
-          {/* QUICK LINKS */}
-          <section style={{ marginTop: "1.2rem" }}>
-            <div className="eventura-panel">
-              <h2 className="eventura-panel-title">Quick actions</h2>
-              <div className="eventura-quick-actions">
+              <div className="eventura-actions" style={{ marginTop: "0.8rem" }}>
                 <Link href="/events" className="eventura-button-secondary">
-                  📁 Go to Events
+                  Go to Events pipeline
                 </Link>
-                <Link href="/finance" className="eventura-button-secondary">
-                  💰 Go to Finance
-                </Link>
+              </div>
+            </div>
+
+            <div className="eventura-panel">
+              <h2 className="eventura-panel-title">
+                Lead sources & conversion
+              </h2>
+              <div className="eventura-table-wrapper">
+                <table className="eventura-table">
+                  <thead>
+                    <tr>
+                      <th>Channel</th>
+                      <th>Leads</th>
+                      <th>Conversion</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {leadSources.map((ls) => (
+                      <tr key={ls.channel}>
+                        <td>{ls.channel}</td>
+                        <td>{ls.leads}</td>
+                        <td>
+                          <span
+                            className={
+                              "eventura-tag " +
+                              (ls.conversionRate >= 40
+                                ? "eventura-tag-green"
+                                : ls.conversionRate >= 20
+                                ? "eventura-tag-blue"
+                                : "eventura-tag-amber")
+                            }
+                          >
+                            {ls.conversionRate}%
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <p className="eventura-small-text" style={{ marginTop: "0.5rem" }}>
+                Use this to decide where to push ads & partnerships – for many
+                event firms, referrals and venue tie-ups are gold.
+              </p>
+              <div className="eventura-actions" style={{ marginTop: "0.8rem" }}>
                 <Link href="/leads" className="eventura-button-secondary">
-                  👥 Go to Leads
-                </Link>
-                <Link href="/vendors" className="eventura-button-secondary">
-                  🤝 Go to Vendors
+                  Open Clients & Leads
                 </Link>
               </div>
             </div>
           </section>
 
-          <footer className="eventura-footer">
-            Eventura · CEO Dashboard · © {new Date().getFullYear()}
-          </footer>
+          {/* CEO-only alerts */}
+          {isCEO && (
+            <section className="eventura-panel" style={{ marginTop: "1.5rem" }}>
+              <h2 className="eventura-panel-title">CEO Alerts & Focus</h2>
+              <ul className="eventura-bullets">
+                <li>
+                  <strong>Margin target:</strong> You are around {avgMargin}%
+                  avg; push premium decor & design upsells to cross 40%.
+                </li>
+                <li>
+                  <strong>HR vs revenue:</strong>{" "}
+                  {((hrKPI.hrCost / hrKPI.revenue) * 100).toFixed(1)}% – safe,
+                  but don’t add fixed salaries unless pipeline grows.
+                </li>
+                <li>
+                  <strong>Pipeline concentration:</strong> Top 2 events make up
+                  a big chunk of weighted revenue – keep backup leads warm.
+                </li>
+                <li>
+                  <strong>Strategic next move:</strong> Lock 1–2 high-margin
+                  weddings per month and use corporates for stable cash flow.
+                </li>
+              </ul>
+              <p className="eventura-small-text">
+                These are static rules for now – later, this panel can become an
+                AI co-pilot reading real data from Finance, Events & HR.
+              </p>
+            </section>
+          )}
+
+          {!isCEO && (
+            <section className="eventura-panel" style={{ marginTop: "1.5rem" }}>
+              <h2 className="eventura-panel-title">Staff view</h2>
+              <p className="eventura-small-text">
+                You are viewing a simplified dashboard. CEO view contains deeper
+                finance & risk details.
+              </p>
+            </section>
+          )}
         </div>
       </div>
     </main>
   );
 }
 
-/* Small components */
-
-function PipelineStage(props: {
-  label: string;
-  count: number;
-  helper: string;
-}) {
-  return (
-    <div className="pipeline-stage">
-      <div className="pipeline-count">{props.count}</div>
-      <div className="pipeline-label">{props.label}</div>
-      <div className="pipeline-helper">{props.helper}</div>
-    </div>
-  );
-}
+/* ========= Shared layout: sidebar + topbar ========= */
 
 function SidebarCore({ user, active }: { user: User; active: string }) {
   const isCEO = user.role === "CEO";
@@ -421,7 +582,7 @@ function TopbarCore({ user }: { user: User }) {
       <div className="eventura-topbar-center">
         <input
           className="eventura-search"
-          placeholder="Search events, clients, vendors..."
+          placeholder="Search events, clients, or numbers..."
         />
       </div>
       <div className="eventura-topbar-right">
