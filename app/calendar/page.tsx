@@ -124,12 +124,39 @@ function parseDateStr(str: string): Date {
 export default function CalendarPage() {
   const [user, setUser] = useState<User | null>(null);
   const [events, setEvents] = useState<CalendarEvent[]>(seedEvents);
-  const [viewMonth, setViewMonth] = useState<Date>(() => {
-    // Default to current month
-    return new Date();
+
+  const [viewMonth, setViewMonth] = useState<Date>(() => new Date());
+  const [selectedDate, setSelectedDate] = useState<string>(() =>
+    getYYYYMMDD(new Date())
+  );
+
+  const [editingId, setEditingId] = useState<number | null>(null);
+
+  const [form, setForm] = useState<{
+    title: string;
+    client: string;
+    date: string;
+    startTime: string;
+    endTime: string;
+    location: string;
+    type: EventType;
+    status: EventStatus;
+    crew: string; // comma string in form
+    estBudget: string;
+  }>({
+    title: "",
+    client: "",
+    date: getYYYYMMDD(new Date()),
+    startTime: "",
+    endTime: "",
+    location: "",
+    type: "Wedding",
+    status: "Tentative",
+    crew: "",
+    estBudget: "",
   });
 
-  // Auth (same logic as HR / Dashboard)
+  // Auth
   useEffect(() => {
     if (typeof window === "undefined") return;
     const raw = window.localStorage.getItem(USER_KEY);
@@ -153,14 +180,16 @@ export default function CalendarPage() {
       const stored = window.localStorage.getItem(CAL_EVENTS_KEY);
       if (stored) {
         const parsed: CalendarEvent[] = JSON.parse(stored);
-        if (Array.isArray(parsed)) setEvents(parsed);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setEvents(parsed);
+        }
       }
     } catch {
       // ignore
     }
   }, []);
 
-  // Persist events to localStorage
+  // Persist events
   useEffect(() => {
     if (typeof window === "undefined") return;
     window.localStorage.setItem(CAL_EVENTS_KEY, JSON.stringify(events));
@@ -175,66 +204,50 @@ export default function CalendarPage() {
     [events]
   );
 
+  const eventsForSelectedDate = useMemo(
+    () => sortedEvents.filter((e) => e.date === selectedDate),
+    [sortedEvents, selectedDate]
+  );
+
   const upcomingEvents = useMemo(() => {
     const today = new Date();
+    const start = today.setHours(0, 0, 0, 0);
     return sortedEvents.filter(
-      (e) => parseDateStr(e.date).getTime() >= today.setHours(0, 0, 0, 0)
+      (e) => parseDateStr(e.date).getTime() >= start
     );
   }, [sortedEvents]);
 
-  // Month grid
-  const monthLabel = useMemo(() => {
-    return viewMonth.toLocaleString("default", {
-      month: "long",
-      year: "numeric",
-    });
+  // Month list for left panel
+  const monthLabel = useMemo(
+    () =>
+      viewMonth.toLocaleString("default", { month: "long", year: "numeric" }),
+    [viewMonth]
+  );
+
+  const daysInMonth = useMemo(() => {
+    const year = viewMonth.getFullYear();
+    const month = viewMonth.getMonth();
+    return new Date(year, month + 1, 0).getDate();
   }, [viewMonth]);
 
   const monthDays = useMemo(() => {
     const year = viewMonth.getFullYear();
-    const month = viewMonth.getMonth(); // 0-11
+    const month = viewMonth.getMonth();
+    const list: { dateStr: string; label: string; hasEvents: boolean }[] = [];
 
-    const firstDay = new Date(year, month, 1);
-    const lastDay = new Date(year, month + 1, 0);
-
-    const startWeekday = firstDay.getDay(); // 0 (Sun) - 6 (Sat)
-    const daysInMonth = lastDay.getDate();
-
-    const cells: {
-      date: Date | null;
-      key: string;
-      isCurrentMonth: boolean;
-    }[] = [];
-
-    // Fill blanks before 1st
-    for (let i = 0; i < startWeekday; i++) {
-      cells.push({
-        date: null,
-        key: `blank-${i}`,
-        isCurrentMonth: false,
-      });
-    }
-
-    // Fill actual days
     for (let d = 1; d <= daysInMonth; d++) {
-      cells.push({
-        date: new Date(year, month, d),
-        key: `day-${d}`,
-        isCurrentMonth: true,
+      const date = new Date(year, month, d);
+      const dateStr = getYYYYMMDD(date);
+      const hasEvents = events.some((e) => e.date === dateStr);
+      list.push({
+        dateStr,
+        label: d.toString(),
+        hasEvents,
       });
     }
 
-    // Make full weeks (42 cells = 6 weeks)
-    while (cells.length < 42) {
-      cells.push({
-        date: null,
-        key: `blank-tail-${cells.length}`,
-        isCurrentMonth: false,
-      });
-    }
-
-    return cells;
-  }, [viewMonth]);
+    return list;
+  }, [viewMonth, daysInMonth, events]);
 
   const handlePrevMonth = () => {
     setViewMonth(
@@ -248,142 +261,129 @@ export default function CalendarPage() {
     );
   };
 
-  const handleAddEvent = (date?: string) => {
-    const defaultDate = date || getYYYYMMDD(new Date());
-    const title = window.prompt("Event title:", "New Event");
-    if (!title) return;
+  const startNewEvent = (date?: string) => {
+    const d = date || selectedDate || getYYYYMMDD(new Date());
+    setEditingId(null);
+    setSelectedDate(d);
+    setForm({
+      title: "",
+      client: "",
+      date: d,
+      startTime: "",
+      endTime: "",
+      location: "",
+      type: "Wedding",
+      status: "Tentative",
+      crew: "",
+      estBudget: "",
+    });
+  };
 
-    const client = window.prompt("Client name:", "") || "";
-    const dateStr =
-      window.prompt("Event date (YYYY-MM-DD):", defaultDate) || defaultDate;
-    const startTime =
-      window.prompt("Start time (HH:MM, optional):", "18:00") || undefined;
-    const endTime =
-      window.prompt("End time (HH:MM, optional):", "22:00") || undefined;
-    const location =
-      window.prompt("Location:", "Surat") || "Surat";
+  const startEditEvent = (ev: CalendarEvent) => {
+    setEditingId(ev.id);
+    setSelectedDate(ev.date);
+    setForm({
+      title: ev.title,
+      client: ev.client,
+      date: ev.date,
+      startTime: ev.startTime || "",
+      endTime: ev.endTime || "",
+      location: ev.location || "",
+      type: ev.type,
+      status: ev.status,
+      crew: ev.crew.join(", "),
+      estBudget: ev.estBudget != null ? ev.estBudget.toString() : "",
+    });
+  };
 
-    const typeRaw =
-      window.prompt(
-        "Type (Wedding / Corporate / Social / Other):",
-        "Wedding"
-      ) || "Wedding";
-    const type = (typeRaw as EventType) || "Wedding";
+  const handleFormChange = (
+    e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>
+  ) => {
+    const { name, value } = e.target;
+    setForm((prev) => ({ ...prev, [name]: value }));
+  };
 
-    const statusRaw =
-      window.prompt(
-        "Status (Tentative / Confirmed / Completed / Cancelled):",
-        "Tentative"
-      ) || "Tentative";
-    const status = (statusRaw as EventStatus) || "Tentative";
+  const handleSaveEvent = (e: React.FormEvent) => {
+    e.preventDefault();
 
-    const estBudget = Number(
-      window.prompt("Estimated budget (₹, optional):", "0")
-    );
-    const crewRaw =
-      window.prompt(
-        "Crew (comma separated, optional):",
-        "Hardik, Shubh, Priya"
-      ) || "";
-    const crew = crewRaw
+    if (!form.title.trim()) {
+      alert("Title is required");
+      return;
+    }
+    if (!form.date) {
+      alert("Date is required");
+      return;
+    }
+
+    const crewArr = form.crew
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean);
+    const estBudgetNumber = form.estBudget
+      ? Number(form.estBudget)
+      : undefined;
 
-    const maxId = events.reduce((max, e) => Math.max(max, e.id), 0);
-    const newEvent: CalendarEvent = {
-      id: maxId + 1,
-      title,
-      client,
-      date: dateStr,
-      startTime,
-      endTime,
-      location,
-      type,
-      status,
-      estBudget: isNaN(estBudget) ? undefined : estBudget,
-      crew,
-    };
+    if (editingId == null) {
+      const maxId = events.reduce((max, ev) => Math.max(max, ev.id), 0);
+      const newEvent: CalendarEvent = {
+        id: maxId + 1,
+        title: form.title.trim(),
+        client: form.client.trim(),
+        date: form.date,
+        startTime: form.startTime || undefined,
+        endTime: form.endTime || undefined,
+        location: form.location || undefined,
+        type: form.type,
+        status: form.status,
+        crew: crewArr,
+        estBudget:
+          estBudgetNumber != null && !isNaN(estBudgetNumber)
+            ? estBudgetNumber
+            : undefined,
+      };
+      setEvents([...events, newEvent]);
+    } else {
+      setEvents(
+        events.map((ev) =>
+          ev.id === editingId
+            ? {
+                ...ev,
+                title: form.title.trim(),
+                client: form.client.trim(),
+                date: form.date,
+                startTime: form.startTime || undefined,
+                endTime: form.endTime || undefined,
+                location: form.location || undefined,
+                type: form.type,
+                status: form.status,
+                crew: crewArr,
+                estBudget:
+                  estBudgetNumber != null && !isNaN(estBudgetNumber)
+                    ? estBudgetNumber
+                    : undefined,
+              }
+            : ev
+        )
+      );
+    }
 
-    setEvents([...events, newEvent]);
+    setSelectedDate(form.date);
+    setEditingId(null);
+    setForm((prev) => ({
+      ...prev,
+      title: "",
+      client: "",
+      crew: "",
+      estBudget: "",
+    }));
   };
 
-  const handleEditEvent = (event: CalendarEvent) => {
-    const title =
-      window.prompt("Event title:", event.title) || event.title;
-    const client =
-      window.prompt("Client name:", event.client) || event.client;
-    const dateStr =
-      window.prompt("Event date (YYYY-MM-DD):", event.date) || event.date;
-    const startTime =
-      window.prompt(
-        "Start time (HH:MM, optional):",
-        event.startTime || ""
-      ) || event.startTime;
-    const endTime =
-      window.prompt(
-        "End time (HH:MM, optional):",
-        event.endTime || ""
-      ) || event.endTime;
-    const location =
-      window.prompt("Location:", event.location || "") ||
-      event.location ||
-      "";
-
-    const typeRaw =
-      window.prompt(
-        "Type (Wedding / Corporate / Social / Other):",
-        event.type
-      ) || event.type;
-    const type = (typeRaw as EventType) || event.type;
-
-    const statusRaw =
-      window.prompt(
-        "Status (Tentative / Confirmed / Completed / Cancelled):",
-        event.status
-      ) || event.status;
-    const status = (statusRaw as EventStatus) || event.status;
-
-    const estBudget = Number(
-      window.prompt(
-        "Estimated budget (₹, optional):",
-        event.estBudget?.toString() || "0"
-      )
-    );
-    const crewRaw =
-      window.prompt(
-        "Crew (comma separated, optional):",
-        event.crew.join(", ")
-      ) || event.crew.join(", ");
-    const crew = crewRaw
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
-
-    setEvents(
-      events.map((e) =>
-        e.id === event.id
-          ? {
-              ...e,
-              title,
-              client,
-              date: dateStr,
-              startTime: startTime || undefined,
-              endTime: endTime || undefined,
-              location,
-              type,
-              status,
-              estBudget: isNaN(estBudget) ? undefined : estBudget,
-              crew,
-            }
-          : e
-      )
-    );
-  };
-
-  const handleDeleteEvent = (event: CalendarEvent) => {
-    if (!window.confirm(`Delete event "${event.title}"?`)) return;
-    setEvents(events.filter((e) => e.id !== event.id));
+  const handleDeleteEvent = (ev: CalendarEvent) => {
+    if (!window.confirm(`Delete event "${ev.title}"?`)) return;
+    setEvents(events.filter((e) => e.id !== ev.id));
+    if (editingId === ev.id) {
+      setEditingId(null);
+    }
   };
 
   if (!user) return null;
@@ -403,127 +403,127 @@ export default function CalendarPage() {
             <div>
               <h1 className="eventura-page-title">Calendar & Event Planner</h1>
               <p className="eventura-subtitle">
-                Plan weddings, corporates and socials by date – add, edit or
-                remove events directly from this calendar.
+                Clean view of all bookings – select a day, then add / edit /
+                delete events on the right.
               </p>
             </div>
             <div className="eventura-chips-row">
               <button
                 type="button"
                 className="eventura-tag eventura-tag-blue"
-                onClick={() => handleAddEvent()}
+                onClick={() => startNewEvent()}
               >
-                + Quick add event
+                + New event
               </button>
             </div>
           </div>
 
-          {/* Calendar + Upcoming */}
+          {/* Main layout: left month / middle list / right editor */}
           <section className="eventura-columns">
-            {/* Calendar grid */}
-            <div className="eventura-panel">
+            {/* LEFT: Month & days */}
+            <div className="eventura-panel" style={{ minWidth: 220 }}>
               <div className="eventura-panel-header-row">
-                <h2 className="eventura-panel-title">Month view</h2>
-                <div className="eventura-chips-row">
-                  <button
-                    type="button"
-                    className="eventura-tag eventura-tag-amber"
-                    onClick={handlePrevMonth}
-                  >
-                    ◀ Prev
-                  </button>
-                  <span className="eventura-card-label">{monthLabel}</span>
-                  <button
-                    type="button"
-                    className="eventura-tag eventura-tag-amber"
-                    onClick={handleNextMonth}
-                  >
-                    Next ▶
-                  </button>
-                </div>
+                <h2 className="eventura-panel-title">Month</h2>
               </div>
-
-              <div className="eventura-calendar-grid">
-                <div className="eventura-calendar-header">
-                  <div>Sun</div>
-                  <div>Mon</div>
-                  <div>Tue</div>
-                  <div>Wed</div>
-                  <div>Thu</div>
-                  <div>Fri</div>
-                  <div>Sat</div>
-                </div>
-                <div className="eventura-calendar-body">
-                  {monthDays.map((cell) => {
-                    if (!cell.date) {
-                      return (
-                        <div key={cell.key} className="eventura-calendar-cell empty" />
-                      );
-                    }
-                    const dateStr = getYYYYMMDD(cell.date);
-                    const dayEvents = events.filter((e) => e.date === dateStr);
-                    const dayNum = cell.date.getDate();
-
-                    return (
-                      <button
-                        key={cell.key}
-                        type="button"
-                        className={
-                          "eventura-calendar-cell" +
-                          (cell.isCurrentMonth ? "" : " faded")
-                        }
-                        onClick={() => handleAddEvent(dateStr)}
-                      >
-                        <div className="eventura-calendar-day-number">
-                          {dayNum}
-                        </div>
-                        <div className="eventura-calendar-events">
-                          {dayEvents.slice(0, 3).map((e) => (
-                            <div
-                              key={e.id}
-                              className={
-                                "eventura-tag eventura-tag-pill " +
-                                eventStatusClass(e.status)
-                              }
-                              title={`${e.title} (${e.client})`}
-                            >
-                              {e.title.length > 14
-                                ? e.title.slice(0, 14) + "…"
-                                : e.title}
-                            </div>
-                          ))}
-                          {dayEvents.length > 3 && (
-                            <div className="eventura-small-text">
-                              +{dayEvents.length - 3} more
-                            </div>
-                          )}
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
+              <div className="eventura-chips-row" style={{ marginBottom: 8 }}>
+                <button
+                  type="button"
+                  className="eventura-tag eventura-tag-amber"
+                  onClick={handlePrevMonth}
+                >
+                  ◀
+                </button>
+                <span className="eventura-card-label">{monthLabel}</span>
+                <button
+                  type="button"
+                  className="eventura-tag eventura-tag-amber"
+                  onClick={handleNextMonth}
+                >
+                  ▶
+                </button>
               </div>
-
-              <p className="eventura-small-text" style={{ marginTop: "0.5rem" }}>
-                Click any date cell to add a new event. Use the list on the
-                right to edit or delete existing bookings.
-              </p>
+              <div
+                style={{
+                  maxHeight: 400,
+                  overflowY: "auto",
+                  borderTop: "1px solid rgba(148, 163, 184, 0.3)",
+                  marginTop: 8,
+                }}
+              >
+                {monthDays.map((d) => {
+                  const isSelected = d.dateStr === selectedDate;
+                  const hasEvents = d.hasEvents;
+                  return (
+                    <button
+                      key={d.dateStr}
+                      type="button"
+                      onClick={() => {
+                        setSelectedDate(d.dateStr);
+                        setForm((prev) => ({ ...prev, date: d.dateStr }));
+                      }}
+                      style={{
+                        width: "100%",
+                        textAlign: "left",
+                        padding: "0.35rem 0.5rem",
+                        border: "none",
+                        background: "transparent",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        cursor: "pointer",
+                        borderRadius: "0.375rem",
+                        marginBottom: 2,
+                        ...(isSelected
+                          ? {
+                              background:
+                                "linear-gradient(to right, rgba(250, 204, 21, 0.18), rgba(156, 163, 175, 0.15))",
+                            }
+                          : {}),
+                      }}
+                    >
+                      <span>
+                        <span
+                          style={{
+                            display: "inline-block",
+                            width: 20,
+                            fontWeight: 600,
+                          }}
+                        >
+                          {d.label}
+                        </span>
+                        <span
+                          style={{
+                            fontSize: "0.7rem",
+                            marginLeft: 6,
+                            color: "#9ca3af",
+                          }}
+                        >
+                          {new Date(d.dateStr).toLocaleDateString("default", {
+                            weekday: "short",
+                          })}
+                        </span>
+                      </span>
+                      {hasEvents && (
+                        <span className="eventura-tag eventura-tag-blue">
+                          ●
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
 
-            {/* Upcoming events list */}
+            {/* MIDDLE: Events on selected day + upcoming */}
             <div className="eventura-panel">
-              <div className="eventura-panel-header-row">
-                <h2 className="eventura-panel-title">Upcoming events</h2>
-                <span className="eventura-card-label">
-                  {upcomingEvents.length} scheduled
-                </span>
-              </div>
-
+              <h2 className="eventura-panel-title">
+                Events on {selectedDate || "selected date"}
+              </h2>
               <div className="eventura-table-wrapper">
                 <table className="eventura-table">
                   <thead>
                     <tr>
-                      <th>Date</th>
+                      <th>Time</th>
                       <th>Event</th>
                       <th>Client</th>
                       <th>Type</th>
@@ -533,56 +533,55 @@ export default function CalendarPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {upcomingEvents.length === 0 && (
+                    {eventsForSelectedDate.length === 0 && (
                       <tr>
                         <td colSpan={7} className="eventura-small-text">
-                          No upcoming events. Add one from the calendar or using
-                          “Quick add event”.
+                          No events for this day. Click “New event” or select a
+                          date on the left and add from the form.
                         </td>
                       </tr>
                     )}
-                    {upcomingEvents.map((e) => (
-                      <tr key={e.id}>
-                        <td>{e.date}</td>
+                    {eventsForSelectedDate.map((ev) => (
+                      <tr key={ev.id}>
                         <td>
-                          <div className="eventura-list-title">{e.title}</div>
-                          {e.location && (
+                          {ev.startTime || "--"}
+                          {ev.endTime ? `–${ev.endTime}` : ""}
+                        </td>
+                        <td>
+                          <div className="eventura-list-title">
+                            {ev.title}
+                          </div>
+                          {ev.location && (
                             <div className="eventura-list-sub">
-                              {e.location}
-                            </div>
-                          )}
-                          {e.startTime && (
-                            <div className="eventura-small-text">
-                              {e.startTime}
-                              {e.endTime ? ` – ${e.endTime}` : ""}
+                              {ev.location}
                             </div>
                           )}
                         </td>
-                        <td>{e.client}</td>
-                        <td>{eventTypeLabel(e.type)}</td>
+                        <td>{ev.client}</td>
+                        <td>{eventTypeLabel(ev.type)}</td>
                         <td>
                           <span
                             className={
-                              "eventura-tag " + eventStatusClass(e.status)
+                              "eventura-tag " + eventStatusClass(ev.status)
                             }
                           >
-                            {e.status}
+                            {ev.status}
                           </span>
                         </td>
-                        <td>{formatINR(e.estBudget)}</td>
+                        <td>{formatINR(ev.estBudget)}</td>
                         <td style={{ whiteSpace: "nowrap" }}>
                           <button
                             type="button"
                             className="eventura-tag eventura-tag-blue"
-                            onClick={() => handleEditEvent(e)}
-                            style={{ marginRight: "0.25rem" }}
+                            onClick={() => startEditEvent(ev)}
+                            style={{ marginRight: 4 }}
                           >
                             Edit
                           </button>
                           <button
                             type="button"
                             className="eventura-tag eventura-tag-amber"
-                            onClick={() => handleDeleteEvent(e)}
+                            onClick={() => handleDeleteEvent(ev)}
                           >
                             Delete
                           </button>
@@ -593,9 +592,221 @@ export default function CalendarPage() {
                 </table>
               </div>
 
+              <h3
+                className="eventura-subsection-title"
+                style={{ marginTop: "1rem" }}
+              >
+                Upcoming events (all)
+              </h3>
+              <div className="eventura-table-wrapper">
+                <table className="eventura-table">
+                  <thead>
+                    <tr>
+                      <th>Date</th>
+                      <th>Event</th>
+                      <th>Client</th>
+                      <th>Type</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {upcomingEvents.length === 0 && (
+                      <tr>
+                        <td colSpan={5} className="eventura-small-text">
+                          No upcoming events in the calendar.
+                        </td>
+                      </tr>
+                    )}
+                    {upcomingEvents.map((ev) => (
+                      <tr key={ev.id}>
+                        <td>{ev.date}</td>
+                        <td>{ev.title}</td>
+                        <td>{ev.client}</td>
+                        <td>{eventTypeLabel(ev.type)}</td>
+                        <td>
+                          <span
+                            className={
+                              "eventura-tag " + eventStatusClass(ev.status)
+                            }
+                          >
+                            {ev.status}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* RIGHT: Event form */}
+            <div className="eventura-panel" style={{ maxWidth: 360 }}>
+              <h2 className="eventura-panel-title">
+                {editingId == null ? "Add new event" : "Edit event"}
+              </h2>
+              <form
+                onSubmit={handleSaveEvent}
+                className="eventura-form"
+                style={{ display: "flex", flexDirection: "column", gap: 8 }}
+              >
+                <label className="eventura-form-label">
+                  <span>Title *</span>
+                  <input
+                    className="eventura-search"
+                    name="title"
+                    value={form.title}
+                    onChange={handleFormChange}
+                    placeholder="Eg. Royal Wedding Reception"
+                  />
+                </label>
+
+                <label className="eventura-form-label">
+                  <span>Client</span>
+                  <input
+                    className="eventura-search"
+                    name="client"
+                    value={form.client}
+                    onChange={handleFormChange}
+                    placeholder="Client / company name"
+                  />
+                </label>
+
+                <label className="eventura-form-label">
+                  <span>Date *</span>
+                  <input
+                    type="date"
+                    className="eventura-search"
+                    name="date"
+                    value={form.date}
+                    onChange={(e) => {
+                      handleFormChange(e);
+                      setSelectedDate(e.target.value);
+                    }}
+                  />
+                </label>
+
+                <div style={{ display: "flex", gap: 8 }}>
+                  <label className="eventura-form-label" style={{ flex: 1 }}>
+                    <span>Start</span>
+                    <input
+                      type="time"
+                      className="eventura-search"
+                      name="startTime"
+                      value={form.startTime}
+                      onChange={handleFormChange}
+                    />
+                  </label>
+                  <label className="eventura-form-label" style={{ flex: 1 }}>
+                    <span>End</span>
+                    <input
+                      type="time"
+                      className="eventura-search"
+                      name="endTime"
+                      value={form.endTime}
+                      onChange={handleFormChange}
+                    />
+                  </label>
+                </div>
+
+                <label className="eventura-form-label">
+                  <span>Location</span>
+                  <input
+                    className="eventura-search"
+                    name="location"
+                    value={form.location}
+                    onChange={handleFormChange}
+                    placeholder="Venue / city"
+                  />
+                </label>
+
+                <div style={{ display: "flex", gap: 8 }}>
+                  <label className="eventura-form-label" style={{ flex: 1 }}>
+                    <span>Type</span>
+                    <select
+                      className="eventura-search"
+                      name="type"
+                      value={form.type}
+                      onChange={handleFormChange}
+                    >
+                      <option value="Wedding">Wedding</option>
+                      <option value="Corporate">Corporate</option>
+                      <option value="Social">Social</option>
+                      <option value="Other">Other</option>
+                    </select>
+                  </label>
+
+                  <label className="eventura-form-label" style={{ flex: 1 }}>
+                    <span>Status</span>
+                    <select
+                      className="eventura-search"
+                      name="status"
+                      value={form.status}
+                      onChange={handleFormChange}
+                    >
+                      <option value="Tentative">Tentative</option>
+                      <option value="Confirmed">Confirmed</option>
+                      <option value="Completed">Completed</option>
+                      <option value="Cancelled">Cancelled</option>
+                    </select>
+                  </label>
+                </div>
+
+                <label className="eventura-form-label">
+                  <span>Estimated budget (₹)</span>
+                  <input
+                    className="eventura-search"
+                    name="estBudget"
+                    value={form.estBudget}
+                    onChange={handleFormChange}
+                    placeholder="Eg. 1200000"
+                  />
+                </label>
+
+                <label className="eventura-form-label">
+                  <span>Crew (comma separated)</span>
+                  <textarea
+                    className="eventura-search"
+                    name="crew"
+                    value={form.crew}
+                    onChange={handleFormChange}
+                    placeholder="Eg. Hardik, Shubh, Priya, Logistics Crew A"
+                    rows={3}
+                  />
+                </label>
+
+                <div
+                  style={{
+                    display: "flex",
+                    gap: 8,
+                    marginTop: 8,
+                    justifyContent: "space-between",
+                  }}
+                >
+                  <button
+                    type="submit"
+                    className="eventura-button-secondary"
+                    style={{ flex: 1 }}
+                  >
+                    {editingId == null ? "Add event" : "Save changes"}
+                  </button>
+                  {editingId != null && (
+                    <button
+                      type="button"
+                      className="eventura-tag eventura-tag-amber"
+                      style={{ flex: 0.8 }}
+                      onClick={() => {
+                        setEditingId(null);
+                        startNewEvent(selectedDate);
+                      }}
+                    >
+                      Cancel edit
+                    </button>
+                  )}
+                </div>
+              </form>
               <p className="eventura-small-text" style={{ marginTop: "0.5rem" }}>
-                Crew, budget and status are editable. Later this can connect with
-                your Finance, HR & Vendors tabs for full execution view.
+                All changes stay in this browser (localStorage). Later we can
+                connect this with your Events & Finance tabs for full sync.
               </p>
             </div>
           </section>
