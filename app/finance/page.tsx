@@ -8,7 +8,7 @@ type Role = "CEO" | "Staff";
 type User = { name: string; role: Role; city: string };
 const USER_KEY = "eventura-user";
 
-/* ================= STORAGE KEYS (MUST MATCH OTHER TABS) ================= */
+/* ================= STORAGE KEYS ================= */
 const DB_EVENTS = "eventura-events";
 const DB_FIN = "eventura-finance-transactions";
 const DB_HR = "eventura-hr-team";
@@ -31,11 +31,11 @@ type TxType = "Income" | "Expense";
 type FinanceTx = {
   id: number;
   type: TxType;
-  date: string; // YYYY-MM-DD
+  date: string;
   category: string;
   amount: number;
   note?: string;
-  eventId?: number; // optional link
+  eventId?: number;
 };
 
 type TeamMember = {
@@ -45,8 +45,8 @@ type TeamMember = {
 };
 
 type FinanceConfig = {
-  gstPct: number; // 0..100
-  arConfirmedIsReceivable: boolean; // AR = confirmed budgets (until completed)
+  gstPct: number;
+  arConfirmedIsReceivable: boolean;
 };
 
 /* ================= UTILS ================= */
@@ -55,12 +55,10 @@ const INR = (v: number) => "₹" + Math.round(v || 0).toLocaleString("en-IN");
 function today() {
   return new Date().toISOString().slice(0, 10);
 }
-
 function clampPct(v: number) {
   if (Number.isNaN(v)) return 0;
   return Math.max(0, Math.min(100, v));
 }
-
 function safeArray<T>(key: string): T[] {
   try {
     const raw = localStorage.getItem(key);
@@ -71,7 +69,6 @@ function safeArray<T>(key: string): T[] {
     return [];
   }
 }
-
 function safeObj<T>(key: string, fallback: T): T {
   try {
     const raw = localStorage.getItem(key);
@@ -81,16 +78,18 @@ function safeObj<T>(key: string, fallback: T): T {
     return fallback;
   }
 }
-
 function nextId(items: { id: number }[]) {
   return (items.reduce((m, x) => Math.max(m, x.id), 0) || 0) + 1;
 }
-
 function yyyymm(d: string) {
   return (d || "").slice(0, 7);
 }
+function pct(a: number, b: number) {
+  if (!b) return 0;
+  return (a / b) * 100;
+}
 
-/* ================= SIMPLE CANVAS CHART (NO LIBS) ================= */
+/* ================= MINI CANVAS CHART ================= */
 function useCanvasResize() {
   const ref = useRef<HTMLCanvasElement | null>(null);
   const [w, setW] = useState(640);
@@ -110,7 +109,7 @@ function useCanvasResize() {
   return { ref, w };
 }
 
-function drawMiniChart(
+function drawChart(
   canvas: HTMLCanvasElement,
   labels: string[],
   series: { name: string; values: number[] }[]
@@ -122,24 +121,24 @@ function drawMiniChart(
   const H = canvas.height;
 
   ctx.clearRect(0, 0, W, H);
+
+  // background
   ctx.fillStyle = "rgba(255,255,255,0.03)";
   ctx.fillRect(0, 0, W, H);
 
-  const padL = 44,
+  const padL = 46,
     padR = 16,
     padT = 16,
-    padB = 30;
+    padB = 32;
   const chartW = W - padL - padR;
   const chartH = H - padT - padB;
 
-  const maxV = Math.max(
-    1,
-    ...series.flatMap((s) => s.values.map((v) => v || 0))
-  );
+  const maxV = Math.max(1, ...series.flatMap((s) => s.values.map((v) => v || 0)));
 
-  // grid
+  // grid + y labels
   ctx.strokeStyle = "rgba(255,255,255,0.10)";
   ctx.lineWidth = 1;
+  ctx.font = "12px system-ui";
   for (let i = 0; i <= 4; i++) {
     const y = padT + (chartH * i) / 4;
     ctx.beginPath();
@@ -149,13 +148,11 @@ function drawMiniChart(
 
     const tick = Math.round(maxV * (1 - i / 4));
     ctx.fillStyle = "rgba(255,255,255,0.65)";
-    ctx.font = "12px system-ui";
     ctx.fillText((tick / 1000).toFixed(0) + "k", 6, y + 4);
   }
 
-  // x labels
+  // x labels (sparse)
   ctx.fillStyle = "rgba(255,255,255,0.65)";
-  ctx.font = "12px system-ui";
   for (let i = 0; i < labels.length; i++) {
     if (labels.length <= 1) break;
     const x = padL + (chartW * i) / (labels.length - 1);
@@ -164,7 +161,7 @@ function drawMiniChart(
     }
   }
 
-  // neutral lines with alpha
+  // series (neutral whites, alpha differences)
   const alphas = [1, 0.7, 0.45];
   series.forEach((s, si) => {
     ctx.strokeStyle = `rgba(255,255,255,${alphas[si % alphas.length]})`;
@@ -181,13 +178,12 @@ function drawMiniChart(
   });
 
   // legend
-  ctx.font = "12px system-ui";
-  ctx.fillStyle = "rgba(255,255,255,0.8)";
+  ctx.fillStyle = "rgba(255,255,255,0.82)";
   let lx = padL;
   const ly = 14;
   series.forEach((s) => {
     ctx.fillText(s.name, lx, ly);
-    lx += ctx.measureText(s.name).width + 14;
+    lx += ctx.measureText(s.name).width + 16;
   });
 }
 
@@ -205,7 +201,13 @@ export default function FinancePage() {
   const [tab, setTab] = useState<"overview" | "ledger" | "events" | "backup">("overview");
   const [filterMonth, setFilterMonth] = useState<string>("ALL");
 
-  // Add transaction
+  // section toggles (UI upgrade)
+  const [showTrend, setShowTrend] = useState(true);
+  const [showRatios, setShowRatios] = useState(true);
+  const [showAi, setShowAi] = useState(true);
+  const [showTables, setShowTables] = useState(true);
+
+  // add tx
   const [form, setForm] = useState({
     type: "Income" as TxType,
     date: today(),
@@ -215,14 +217,15 @@ export default function FinancePage() {
     eventId: "",
   });
 
-  // Editing
+  // edit tx
   const [editingTxId, setEditingTxId] = useState<number | null>(null);
   const [editingTx, setEditingTx] = useState<FinanceTx | null>(null);
 
+  // edit event
   const [editingEventId, setEditingEventId] = useState<number | null>(null);
   const [editingEvent, setEditingEvent] = useState<EventItem | null>(null);
 
-  // Backup
+  // backup
   const [backupText, setBackupText] = useState("");
 
   // chart
@@ -241,7 +244,7 @@ export default function FinancePage() {
     }
   }, []);
 
-  /* ===== LOAD (NO SEED OVERWRITE) ===== */
+  /* ===== LOAD ===== */
   useEffect(() => {
     setEvents(safeArray<EventItem>(DB_EVENTS));
     setTx(safeArray<FinanceTx>(DB_FIN));
@@ -249,7 +252,7 @@ export default function FinancePage() {
     setCfg(safeObj<FinanceConfig>(DB_FIN_CFG, defaultCfg));
   }, []);
 
-  /* ===== PERSIST (THIS PREVENTS "DELETE COMES BACK") ===== */
+  /* ===== PERSIST (prevents “delete appears again”) ===== */
   useEffect(() => {
     localStorage.setItem(DB_FIN, JSON.stringify(tx));
   }, [tx]);
@@ -262,12 +265,17 @@ export default function FinancePage() {
     localStorage.setItem(DB_FIN_CFG, JSON.stringify(cfg));
   }, [cfg]);
 
-  /* ================= DERIVED DATA ================= */
-
+  /* ================= DATA ================= */
   const eventRevenueRows = useMemo(() => {
     return events
       .filter((e) => e.status === "Confirmed" || e.status === "Completed")
-      .map((e) => ({ id: e.id, date: e.date, title: e.title, status: e.status, amount: e.budget || 0 }))
+      .map((e) => ({
+        id: e.id,
+        date: e.date,
+        title: e.title,
+        status: e.status,
+        amount: e.budget || 0,
+      }))
       .sort((a, b) => a.date.localeCompare(b.date));
   }, [events]);
 
@@ -289,31 +297,25 @@ export default function FinancePage() {
   }, [eventRevenueRows, filterMonth]);
 
   /* ================= CALC ================= */
+  const coreHrCost = useMemo(() => {
+    return team.filter((m) => m.status === "Core").reduce((s, m) => s + (m.monthlySalary || 0), 0);
+  }, [team]);
 
-  const coreHrCost = useMemo(
-    () => team.filter((m) => m.status === "Core").reduce((s, m) => s + (m.monthlySalary || 0), 0),
-    [team]
-  );
+  const manualIncome = useMemo(() => {
+    return filteredTx.filter((t) => t.type === "Income").reduce((s, t) => s + t.amount, 0);
+  }, [filteredTx]);
 
-  const manualIncome = useMemo(
-    () => filteredTx.filter((t) => t.type === "Income").reduce((s, t) => s + t.amount, 0),
-    [filteredTx]
-  );
+  const manualExpense = useMemo(() => {
+    return filteredTx.filter((t) => t.type === "Expense").reduce((s, t) => s + t.amount, 0);
+  }, [filteredTx]);
 
-  const manualExpense = useMemo(
-    () => filteredTx.filter((t) => t.type === "Expense").reduce((s, t) => s + t.amount, 0),
-    [filteredTx]
-  );
-
-  const autoEventIncome = useMemo(
-    () => filteredEventRevenue.reduce((s, r) => s + r.amount, 0),
-    [filteredEventRevenue]
-  );
+  const autoEventIncome = useMemo(() => {
+    return filteredEventRevenue.reduce((s, r) => s + r.amount, 0);
+  }, [filteredEventRevenue]);
 
   const totalRevenue = manualIncome + autoEventIncome;
   const gstAmount = (totalRevenue * clampPct(cfg.gstPct)) / 100;
   const netRevenue = totalRevenue - gstAmount;
-
   const netProfit = netRevenue - manualExpense - coreHrCost;
 
   const receivable = useMemo(() => {
@@ -324,28 +326,35 @@ export default function FinancePage() {
   const ratios = useMemo(() => {
     const rev = totalRevenue || 1;
     return {
-      netMargin: (netProfit / rev) * 100,
-      hrRatio: (coreHrCost / rev) * 100,
-      expenseRatio: (manualExpense / rev) * 100,
+      netMargin: pct(netProfit, rev),
+      hrRatio: pct(coreHrCost, rev),
+      expenseRatio: pct(manualExpense, rev),
+      gstRatio: pct(gstAmount, rev),
       runwayMonths: manualExpense > 0 ? netRevenue / manualExpense : 0,
     };
-  }, [totalRevenue, netProfit, coreHrCost, manualExpense, netRevenue]);
-
-  /* ================= AI INSIGHTS ================= */
+  }, [totalRevenue, netProfit, coreHrCost, manualExpense, gstAmount, netRevenue]);
 
   const aiInsights = useMemo(() => {
-    const list: string[] = [];
-    if (totalRevenue === 0) list.push("⚠ No revenue detected. Add event budgets (Confirmed/Completed) or add Income transactions.");
-    if (ratios.netMargin < 20) list.push("🚨 Net margin below 20%. Increase pricing or reduce vendor costs.");
-    if (ratios.hrRatio > 35) list.push("⚠ HR ratio above 35%. Consider freelancers for peak work.");
-    if (ratios.expenseRatio > 55) list.push("⚠ Expenses above 55% of revenue. Audit top spending categories.");
-    if (receivable > 0) list.push(`💰 Pending collections (Receivable): ${INR(receivable)}. Follow-up with clients.`);
-    if (list.length === 0) list.push("✅ Finance looks stable. Maintain margin discipline and collect payments faster.");
+    const list: { tone: "good" | "warn" | "bad"; text: string }[] = [];
+
+    if (totalRevenue === 0)
+      list.push({ tone: "warn", text: "No revenue detected. Add event budgets (Confirmed/Completed) or add Income transactions." });
+
+    if (ratios.netMargin < 20) list.push({ tone: "bad", text: "Net margin below 20% — increase pricing or reduce vendor cost." });
+    else list.push({ tone: "good", text: `Net margin looks ${ratios.netMargin.toFixed(1)}%. Keep premium pricing discipline.` });
+
+    if (ratios.hrRatio > 35) list.push({ tone: "warn", text: "HR ratio above 35% — use freelancers during peak load." });
+
+    if (ratios.expenseRatio > 55) list.push({ tone: "warn", text: "Expense ratio above 55% — audit categories and renegotiate vendors." });
+
+    if (receivable > 0) list.push({ tone: "warn", text: `Pending collections: ${INR(receivable)} — follow up with confirmed clients.` });
+
+    if (list.length === 0) list.push({ tone: "good", text: "Finance is stable. Maintain margin, collect payments faster, and scale confidently." });
+
     return list;
   }, [totalRevenue, ratios, receivable]);
 
-  /* ================= CHART DATA ================= */
-
+  /* ================= CHART SERIES ================= */
   const monthlySeries = useMemo(() => {
     const map = new Map<string, { income: number; expense: number; eventIncome: number }>();
 
@@ -367,11 +376,11 @@ export default function FinancePage() {
     });
 
     const months = Array.from(map.keys()).sort();
-    const rev = months.map((m) => (map.get(m)!.income || 0) + (map.get(m)!.eventIncome || 0));
-    const exp = months.map((m) => map.get(m)!.expense || 0);
-    const prof = months.map((_, i) => rev[i] - exp[i]);
+    const revenue = months.map((m) => (map.get(m)!.income || 0) + (map.get(m)!.eventIncome || 0));
+    const expense = months.map((m) => map.get(m)!.expense || 0);
+    const profit = months.map((_, i) => revenue[i] - expense[i]);
 
-    return { months, rev, exp, prof };
+    return { months, revenue, expense, profit };
   }, [tx, events]);
 
   useEffect(() => {
@@ -380,15 +389,14 @@ export default function FinancePage() {
     canvas.width = chartW;
     canvas.height = 220;
 
-    drawMiniChart(canvas, monthlySeries.months, [
-      { name: "Revenue", values: monthlySeries.rev },
-      { name: "Expense", values: monthlySeries.exp },
-      { name: "Profit", values: monthlySeries.prof },
+    drawChart(canvas, monthlySeries.months, [
+      { name: "Revenue", values: monthlySeries.revenue },
+      { name: "Expense", values: monthlySeries.expense },
+      { name: "Profit", values: monthlySeries.profit },
     ]);
   }, [chartRef, chartW, monthlySeries]);
 
-  /* ================= CRUD: TRANSACTIONS ================= */
-
+  /* ================= CRUD: TX ================= */
   const addTx = () => {
     const amt = Number(form.amount);
     if (!form.date) return alert("Date required");
@@ -435,8 +443,7 @@ export default function FinancePage() {
     setEditingTx(null);
   };
 
-  /* ================= CRUD: EVENTS (FROM FINANCE) ================= */
-
+  /* ================= CRUD: EVENTS FROM FINANCE ================= */
   const startEditEvent = (e: EventItem) => {
     setEditingEventId(e.id);
     setEditingEvent({ ...e, budget: e.budget || 0 });
@@ -470,10 +477,9 @@ export default function FinancePage() {
   };
 
   /* ================= BACKUP ================= */
-
   const exportJSON = async () => {
     const payload = {
-      version: 1,
+      version: 2,
       exportedAt: new Date().toISOString(),
       config: cfg,
       transactions: tx,
@@ -508,10 +514,215 @@ export default function FinancePage() {
   if (!user) return null;
   if (user.role !== "CEO") return <div style={{ padding: 20 }}>Finance is CEO-only.</div>;
 
-  /* ================= UI ================= */
+  /* ================= UI HELPERS ================= */
+  const toneClass = (tone: "good" | "warn" | "bad") => {
+    if (tone === "good") return "fin-pill fin-good";
+    if (tone === "warn") return "fin-pill fin-warn";
+    return "fin-pill fin-bad";
+  };
 
   return (
     <main className="eventura-os">
+      {/* Scoped premium finance styles — only affects Finance page */}
+      <style jsx>{`
+        .fin-wrap {
+          display: grid;
+          gap: 14px;
+        }
+        .fin-head {
+          display: flex;
+          justify-content: space-between;
+          align-items: flex-end;
+          gap: 12px;
+          flex-wrap: wrap;
+        }
+        .fin-title {
+          font-size: 1.4rem;
+          font-weight: 700;
+          letter-spacing: 0.4px;
+        }
+        .fin-sub {
+          opacity: 0.78;
+          font-size: 0.9rem;
+          margin-top: 4px;
+        }
+
+        .fin-tabs {
+          display: flex;
+          gap: 10px;
+          flex-wrap: wrap;
+          align-items: center;
+        }
+
+        .fin-toolbar {
+          display: flex;
+          gap: 10px;
+          flex-wrap: wrap;
+          align-items: center;
+          padding: 12px;
+          border-radius: 18px;
+          border: 1px solid rgba(255, 255, 255, 0.08);
+          background: rgba(11, 16, 32, 0.78);
+          backdrop-filter: blur(10px);
+        }
+
+        .fin-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+          gap: 12px;
+        }
+
+        .fin-kpi {
+          border-radius: 20px;
+          padding: 16px;
+          border: 1px solid rgba(212, 175, 55, 0.22);
+          background: linear-gradient(
+            135deg,
+            rgba(212, 175, 55, 0.11),
+            rgba(255, 255, 255, 0.03)
+          );
+          box-shadow: 0 12px 34px rgba(0, 0, 0, 0.24);
+        }
+        .fin-kpi-label {
+          opacity: 0.75;
+          font-size: 0.78rem;
+          letter-spacing: 0.08em;
+          text-transform: uppercase;
+        }
+        .fin-kpi-value {
+          font-size: 1.75rem;
+          font-weight: 800;
+          margin-top: 6px;
+        }
+        .fin-kpi-note {
+          margin-top: 6px;
+          font-size: 0.82rem;
+          opacity: 0.75;
+        }
+
+        .fin-panels {
+          display: grid;
+          grid-template-columns: 1.2fr 0.8fr;
+          gap: 12px;
+        }
+        @media (max-width: 980px) {
+          .fin-panels {
+            grid-template-columns: 1fr;
+          }
+        }
+
+        .fin-panel {
+          border-radius: 22px;
+          padding: 16px;
+          border: 1px solid rgba(255, 255, 255, 0.08);
+          background: rgba(11, 16, 32, 0.78);
+          backdrop-filter: blur(10px);
+        }
+
+        .fin-panel-title {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 10px;
+          margin-bottom: 10px;
+        }
+        .fin-panel-title h2 {
+          font-size: 1.05rem;
+          font-weight: 700;
+          margin: 0;
+        }
+
+        .fin-toggle {
+          border-radius: 999px;
+          border: 1px solid rgba(255, 255, 255, 0.12);
+          background: rgba(255, 255, 255, 0.04);
+          padding: 7px 12px;
+          cursor: pointer;
+          font-size: 0.8rem;
+          opacity: 0.92;
+        }
+        .fin-toggle:hover {
+          background: rgba(255, 255, 255, 0.08);
+        }
+
+        .fin-ai {
+          border: 1px solid rgba(139, 92, 246, 0.35);
+          background: linear-gradient(
+            135deg,
+            rgba(139, 92, 246, 0.16),
+            rgba(212, 175, 55, 0.07)
+          );
+        }
+
+        .fin-pill {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          padding: 10px 12px;
+          border-radius: 14px;
+          border: 1px solid rgba(255, 255, 255, 0.10);
+          background: rgba(255, 255, 255, 0.04);
+          margin: 6px 0;
+          font-size: 0.9rem;
+        }
+        .fin-good {
+          border-color: rgba(34, 197, 94, 0.35);
+        }
+        .fin-warn {
+          border-color: rgba(59, 130, 246, 0.35);
+        }
+        .fin-bad {
+          border-color: rgba(248, 113, 113, 0.35);
+        }
+
+        .fin-metrics {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 10px;
+          margin-top: 10px;
+        }
+        @media (max-width: 520px) {
+          .fin-metrics {
+            grid-template-columns: 1fr;
+          }
+        }
+        .fin-metric {
+          border-radius: 16px;
+          border: 1px solid rgba(255, 255, 255, 0.08);
+          background: rgba(255, 255, 255, 0.03);
+          padding: 12px;
+        }
+        .fin-metric small {
+          opacity: 0.7;
+          letter-spacing: 0.08em;
+          text-transform: uppercase;
+          font-size: 0.72rem;
+        }
+        .fin-metric div {
+          margin-top: 6px;
+          font-size: 1.05rem;
+          font-weight: 700;
+        }
+
+        .fin-canvas {
+          width: 100%;
+          border-radius: 16px;
+          border: 1px solid rgba(255, 255, 255, 0.08);
+          background: rgba(255, 255, 255, 0.03);
+        }
+
+        /* Make tables lighter (still using your eventura-table styles) */
+        .fin-table th {
+          font-size: 0.72rem;
+          text-transform: uppercase;
+          letter-spacing: 0.10em;
+          opacity: 0.7;
+        }
+        .fin-table td {
+          font-size: 0.9rem;
+        }
+      `}</style>
+
       <aside className="eventura-sidebar">
         <SidebarCore user={user} active="finance" />
       </aside>
@@ -519,211 +730,362 @@ export default function FinancePage() {
       <div className="eventura-main">
         <TopbarCore user={user} />
 
-        <div className="eventura-content">
-          <div className="eventura-header-row">
+        <div className="eventura-content fin-wrap">
+          <div className="fin-head">
             <div>
-              <h1 className="eventura-page-title">Finance (Fixed + Working)</h1>
-              <p className="eventura-subtitle">
-                Auto Events revenue + editable ledger + ratios + AI insights. Deletes won’t come back.
-              </p>
+              <div className="fin-title">Finance Intelligence</div>
+              <div className="fin-sub">CEO dashboard · Clean UI · Editable ledger · Auto event revenue</div>
             </div>
 
-            <div className="eventura-chips-row">
-              <button className={"eventura-tag " + (tab === "overview" ? "eventura-tag-blue" : "eventura-tag-amber")} onClick={() => setTab("overview")}>Overview</button>
-              <button className={"eventura-tag " + (tab === "ledger" ? "eventura-tag-blue" : "eventura-tag-amber")} onClick={() => setTab("ledger")}>Ledger</button>
-              <button className={"eventura-tag " + (tab === "events" ? "eventura-tag-blue" : "eventura-tag-amber")} onClick={() => setTab("events")}>Events Revenue</button>
-              <button className={"eventura-tag " + (tab === "backup" ? "eventura-tag-blue" : "eventura-tag-amber")} onClick={() => setTab("backup")}>Backup</button>
+            <div className="fin-tabs">
+              <button
+                className={"eventura-tag " + (tab === "overview" ? "eventura-tag-blue" : "eventura-tag-amber")}
+                onClick={() => setTab("overview")}
+                type="button"
+              >
+                Overview
+              </button>
+              <button
+                className={"eventura-tag " + (tab === "ledger" ? "eventura-tag-blue" : "eventura-tag-amber")}
+                onClick={() => setTab("ledger")}
+                type="button"
+              >
+                Ledger
+              </button>
+              <button
+                className={"eventura-tag " + (tab === "events" ? "eventura-tag-blue" : "eventura-tag-amber")}
+                onClick={() => setTab("events")}
+                type="button"
+              >
+                Events Revenue
+              </button>
+              <button
+                className={"eventura-tag " + (tab === "backup" ? "eventura-tag-blue" : "eventura-tag-amber")}
+                onClick={() => setTab("backup")}
+                type="button"
+              >
+                Backup
+              </button>
             </div>
           </div>
 
-          {/* Filter row */}
-          <div className="eventura-panel" style={{ marginBottom: 14 }}>
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-              <div className="eventura-small-text">Month filter:</div>
-              <select className="eventura-search" style={{ maxWidth: 240 }} value={filterMonth} onChange={(e) => setFilterMonth(e.target.value)}>
-                {monthOptions.map((m) => (
-                  <option key={m} value={m}>
-                    {m === "ALL" ? "ALL (Totals)" : m}
-                  </option>
-                ))}
-              </select>
+          {/* Toolbar */}
+          <div className="fin-toolbar">
+            <div className="eventura-small-text">Month:</div>
+            <select className="eventura-search" style={{ maxWidth: 220 }} value={filterMonth} onChange={(e) => setFilterMonth(e.target.value)}>
+              {monthOptions.map((m) => (
+                <option key={m} value={m}>
+                  {m === "ALL" ? "ALL (Totals)" : m}
+                </option>
+              ))}
+            </select>
 
-              <div className="eventura-small-text">GST %</div>
-              <input className="eventura-search" style={{ width: 120 }} type="number" value={cfg.gstPct} onChange={(e) => setCfg({ ...cfg, gstPct: clampPct(Number(e.target.value)) })} />
+            <div className="eventura-small-text">GST %</div>
+            <input
+              className="eventura-search"
+              style={{ width: 110 }}
+              type="number"
+              value={cfg.gstPct}
+              onChange={(e) => setCfg({ ...cfg, gstPct: clampPct(Number(e.target.value)) })}
+            />
 
-              <label className="eventura-small-text" style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <input type="checkbox" checked={cfg.arConfirmedIsReceivable} onChange={(e) => setCfg({ ...cfg, arConfirmedIsReceivable: e.target.checked })} />
-                Confirmed = Receivable
-              </label>
-            </div>
+            <label className="eventura-small-text" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <input
+                type="checkbox"
+                checked={cfg.arConfirmedIsReceivable}
+                onChange={(e) => setCfg({ ...cfg, arConfirmedIsReceivable: e.target.checked })}
+              />
+              Confirmed = Receivable
+            </label>
+
+            <div style={{ flex: 1 }} />
+
+            <Link href="/events" className="eventura-button-secondary">
+              Open Events
+            </Link>
           </div>
 
+          {/* OVERVIEW */}
           {tab === "overview" && (
             <>
-              <section className="eventura-grid">
-                <Card label="Event Revenue (Auto)" value={INR(autoEventIncome)} note="Confirmed/Completed budgets" />
-                <Card label="Manual Income" value={INR(manualIncome)} note="Income transactions" />
-                <Card label="Total Revenue" value={INR(totalRevenue)} note="Auto + Manual" />
-                <Card label={`GST (${cfg.gstPct}%)`} value={INR(gstAmount)} note="Tax-ready" />
-                <Card label="Net Revenue" value={INR(netRevenue)} note="After GST" />
-                <Card label="Expenses" value={INR(manualExpense)} note="Expense transactions" />
-                <Card label="HR Cost (Core)" value={INR(coreHrCost)} note="From HR DB" />
-                <Card label="Net Profit" value={INR(netProfit)} note="NetRev − Expense − HR" />
+              {/* KPIs */}
+              <section className="fin-grid">
+                <div className="fin-kpi">
+                  <div className="fin-kpi-label">Total Revenue</div>
+                  <div className="fin-kpi-value">{INR(totalRevenue)}</div>
+                  <div className="fin-kpi-note">Auto Events + Manual Income</div>
+                </div>
+                <div className="fin-kpi">
+                  <div className="fin-kpi-label">Net Profit</div>
+                  <div className="fin-kpi-value">{INR(netProfit)}</div>
+                  <div className="fin-kpi-note">After GST + HR + Expenses</div>
+                </div>
+                <div className="fin-kpi">
+                  <div className="fin-kpi-label">HR Cost</div>
+                  <div className="fin-kpi-value">{INR(coreHrCost)}</div>
+                  <div className="fin-kpi-note">From HR (Core staff)</div>
+                </div>
+                <div className="fin-kpi">
+                  <div className="fin-kpi-label">Receivable</div>
+                  <div className="fin-kpi-value">{INR(receivable)}</div>
+                  <div className="fin-kpi-note">Pending collections</div>
+                </div>
               </section>
 
-              <section className="eventura-columns">
-                <div className="eventura-panel">
-                  <h2 className="eventura-panel-title">Monthly Trend</h2>
-                  <canvas ref={chartRef} style={{ width: "100%", borderRadius: 14 }} />
-                  <p className="eventura-small-text" style={{ marginTop: 8 }}>
-                    Chart uses events + transactions (all months).
-                  </p>
-                </div>
-
-                <div className="eventura-panel">
-                  <h2 className="eventura-panel-title">Ratios + AI Insights</h2>
-
-                  <div className="eventura-table-wrapper">
-                    <table className="eventura-table">
-                      <thead>
-                        <tr><th>Metric</th><th>Value</th><th>Target</th></tr>
-                      </thead>
-                      <tbody>
-                        <tr><td>Net Margin</td><td>{ratios.netMargin.toFixed(1)}%</td><td>25%+</td></tr>
-                        <tr><td>HR Ratio</td><td>{ratios.hrRatio.toFixed(1)}%</td><td>&lt; 35%</td></tr>
-                        <tr><td>Expense Ratio</td><td>{ratios.expenseRatio.toFixed(1)}%</td><td>&lt; 55%</td></tr>
-                        <tr><td>Cash Runway</td><td>{ratios.runwayMonths.toFixed(1)} months</td><td>3+ months</td></tr>
-                        <tr><td>Receivable</td><td>{INR(receivable)}</td><td>Collect fast</td></tr>
-                      </tbody>
-                    </table>
+              <section className="fin-panels">
+                {/* Trend */}
+                <div className="fin-panel">
+                  <div className="fin-panel-title">
+                    <h2>Monthly Trend</h2>
+                    <button className="fin-toggle" type="button" onClick={() => setShowTrend((s) => !s)}>
+                      {showTrend ? "Hide" : "Show"}
+                    </button>
                   </div>
 
-                  <ul className="eventura-bullets" style={{ marginTop: 10 }}>
-                    {aiInsights.map((x, i) => <li key={i}>{x}</li>)}
-                  </ul>
+                  {showTrend ? (
+                    <>
+                      <canvas ref={chartRef} className="fin-canvas" />
+                      <div className="eventura-small-text" style={{ marginTop: 10, opacity: 0.8 }}>
+                        Revenue includes Events budgets (Confirmed/Completed) + Income transactions.
+                      </div>
+                    </>
+                  ) : (
+                    <div className="eventura-small-text" style={{ opacity: 0.75 }}>
+                      Trend hidden.
+                    </div>
+                  )}
+                </div>
+
+                {/* Ratios + AI */}
+                <div className="fin-panel fin-ai">
+                  <div className="fin-panel-title">
+                    <h2>CEO Insights</h2>
+                    <button className="fin-toggle" type="button" onClick={() => setShowAi((s) => !s)}>
+                      {showAi ? "Hide" : "Show"}
+                    </button>
+                  </div>
+
+                  {showAi && (
+                    <div>
+                      {aiInsights.map((x, i) => (
+                        <div key={i} className={toneClass(x.tone)}>
+                          <span>✨</span>
+                          <span>{x.text}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="fin-panel-title" style={{ marginTop: 14 }}>
+                    <h2>Ratios</h2>
+                    <button className="fin-toggle" type="button" onClick={() => setShowRatios((s) => !s)}>
+                      {showRatios ? "Hide" : "Show"}
+                    </button>
+                  </div>
+
+                  {showRatios && (
+                    <div className="fin-metrics">
+                      <div className="fin-metric">
+                        <small>Net Margin</small>
+                        <div>{ratios.netMargin.toFixed(1)}%</div>
+                      </div>
+                      <div className="fin-metric">
+                        <small>Expense Ratio</small>
+                        <div>{ratios.expenseRatio.toFixed(1)}%</div>
+                      </div>
+                      <div className="fin-metric">
+                        <small>HR Ratio</small>
+                        <div>{ratios.hrRatio.toFixed(1)}%</div>
+                      </div>
+                      <div className="fin-metric">
+                        <small>GST Ratio</small>
+                        <div>{ratios.gstRatio.toFixed(1)}%</div>
+                      </div>
+                      <div className="fin-metric">
+                        <small>Cash Runway</small>
+                        <div>{ratios.runwayMonths.toFixed(1)} mo</div>
+                      </div>
+                      <div className="fin-metric">
+                        <small>Net Revenue</small>
+                        <div>{INR(netRevenue)}</div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </section>
             </>
           )}
 
+          {/* LEDGER */}
           {tab === "ledger" && (
             <section className="eventura-columns">
-              <div className="eventura-panel">
-                <h2 className="eventura-panel-title">Add Transaction</h2>
-                <div style={{ display: "grid", gap: 8 }}>
-                  <div style={{ display: "flex", gap: 8 }}>
+              <div className="fin-panel">
+                <div className="fin-panel-title">
+                  <h2>Add Transaction</h2>
+                  <button className="fin-toggle" type="button" onClick={() => setShowTables((s) => !s)}>
+                    {showTables ? "Hide Tables" : "Show Tables"}
+                  </button>
+                </div>
+
+                <div style={{ display: "grid", gap: 10 }}>
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
                     <select className="eventura-search" value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value as TxType })}>
                       <option>Income</option>
                       <option>Expense</option>
                     </select>
                     <input className="eventura-search" type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} />
+                    <input className="eventura-search" placeholder="Category" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} />
+                    <input className="eventura-search" placeholder="Amount" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} />
                   </div>
 
-                  <input className="eventura-search" placeholder="Category" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} />
-                  <input className="eventura-search" placeholder="Amount" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} />
-                  <input className="eventura-search" placeholder="Note (optional)" value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} />
-
-                  <select className="eventura-search" value={form.eventId} onChange={(e) => setForm({ ...form, eventId: e.target.value })}>
-                    <option value="">Link to Event (optional)</option>
-                    {events.map((ev) => (
-                      <option key={ev.id} value={ev.id}>
-                        #{ev.id} — {ev.title}
-                      </option>
-                    ))}
-                  </select>
-
-                  <button className="eventura-button-secondary" onClick={addTx}>Add</button>
-                </div>
-              </div>
-
-              <div className="eventura-panel">
-                <h2 className="eventura-panel-title">Ledger (Edit / Delete)</h2>
-                <div className="eventura-table-wrapper">
-                  <table className="eventura-table">
-                    <thead>
-                      <tr><th>Date</th><th>Type</th><th>Category</th><th>Amount</th><th></th></tr>
-                    </thead>
-                    <tbody>
-                      {filteredTx.length === 0 ? (
-                        <tr><td colSpan={5} className="eventura-small-text">No transactions for this filter.</td></tr>
-                      ) : (
-                        filteredTx.map((t) => (
-                          <tr key={t.id}>
-                            <td>{t.date}</td>
-                            <td>{t.type}</td>
-                            <td>
-                              <div className="eventura-list-title">{t.category}</div>
-                              <div className="eventura-list-sub">{t.note || ""}</div>
-                            </td>
-                            <td>{INR(t.amount)}</td>
-                            <td style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                              <button className="eventura-tag eventura-tag-blue" onClick={() => startEditTx(t)}>Edit</button>
-                              <button className="eventura-tag eventura-tag-amber" onClick={() => deleteTx(t.id)}>Delete</button>
-                            </td>
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                    <input className="eventura-search" placeholder="Note (optional)" value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} />
+                    <select className="eventura-search" value={form.eventId} onChange={(e) => setForm({ ...form, eventId: e.target.value })}>
+                      <option value="">Link to Event (optional)</option>
+                      {events.map((ev) => (
+                        <option key={ev.id} value={ev.id}>
+                          #{ev.id} — {ev.title}
+                        </option>
+                      ))}
+                    </select>
+                    <button className="eventura-button-secondary" type="button" onClick={addTx}>
+                      Add
+                    </button>
+                  </div>
                 </div>
 
                 {editingTxId && editingTx && (
-                  <div className="eventura-card" style={{ marginTop: 12 }}>
+                  <div className="eventura-card" style={{ marginTop: 14 }}>
                     <p className="eventura-card-label">Edit Transaction</p>
-                    <div style={{ display: "grid", gap: 8 }}>
-                      <div style={{ display: "flex", gap: 8 }}>
+                    <div style={{ display: "grid", gap: 10 }}>
+                      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
                         <select className="eventura-search" value={editingTx.type} onChange={(e) => setEditingTx({ ...editingTx, type: e.target.value as TxType })}>
                           <option>Income</option>
                           <option>Expense</option>
                         </select>
                         <input className="eventura-search" type="date" value={editingTx.date} onChange={(e) => setEditingTx({ ...editingTx, date: e.target.value })} />
+                        <input className="eventura-search" value={editingTx.category} onChange={(e) => setEditingTx({ ...editingTx, category: e.target.value })} />
+                        <input className="eventura-search" type="number" value={editingTx.amount} onChange={(e) => setEditingTx({ ...editingTx, amount: Number(e.target.value) || 0 })} />
                       </div>
-
-                      <input className="eventura-search" value={editingTx.category} onChange={(e) => setEditingTx({ ...editingTx, category: e.target.value })} />
-                      <input className="eventura-search" type="number" value={editingTx.amount} onChange={(e) => setEditingTx({ ...editingTx, amount: Number(e.target.value) || 0 })} />
                       <input className="eventura-search" value={editingTx.note || ""} onChange={(e) => setEditingTx({ ...editingTx, note: e.target.value })} />
-
-                      <div style={{ display: "flex", gap: 8 }}>
-                        <button className="eventura-button-secondary" onClick={saveEditTx}>Save</button>
-                        <button className="eventura-tag eventura-tag-amber" onClick={cancelEditTx}>Cancel</button>
+                      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                        <button className="eventura-button-secondary" type="button" onClick={saveEditTx}>
+                          Save
+                        </button>
+                        <button className="eventura-tag eventura-tag-amber" type="button" onClick={cancelEditTx}>
+                          Cancel
+                        </button>
                       </div>
                     </div>
                   </div>
                 )}
               </div>
+
+              {showTables && (
+                <div className="fin-panel">
+                  <div className="fin-panel-title">
+                    <h2>Ledger</h2>
+                    <div className="eventura-small-text" style={{ opacity: 0.75 }}>
+                      Edit / Delete supported
+                    </div>
+                  </div>
+
+                  <div className="eventura-table-wrapper">
+                    <table className="eventura-table fin-table">
+                      <thead>
+                        <tr>
+                          <th>Date</th>
+                          <th>Type</th>
+                          <th>Category</th>
+                          <th>Amount</th>
+                          <th />
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredTx.length === 0 ? (
+                          <tr>
+                            <td colSpan={5} className="eventura-small-text">
+                              No transactions for this filter.
+                            </td>
+                          </tr>
+                        ) : (
+                          filteredTx.map((t) => (
+                            <tr key={t.id}>
+                              <td>{t.date}</td>
+                              <td>{t.type}</td>
+                              <td>
+                                <div className="eventura-list-title">{t.category}</div>
+                                <div className="eventura-list-sub">{t.note || ""}</div>
+                              </td>
+                              <td>{INR(t.amount)}</td>
+                              <td style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                                <button className="eventura-tag eventura-tag-blue" type="button" onClick={() => startEditTx(t)}>
+                                  Edit
+                                </button>
+                                <button className="eventura-tag eventura-tag-amber" type="button" onClick={() => deleteTx(t.id)}>
+                                  Delete
+                                </button>
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
             </section>
           )}
 
+          {/* EVENTS REVENUE */}
           {tab === "events" && (
             <section className="eventura-columns">
-              <div className="eventura-panel">
-                <h2 className="eventura-panel-title">Events Revenue (Auto)</h2>
-                <p className="eventura-small-text">
-                  Only Confirmed/Completed event budgets count as revenue. Edit budgets/status here.
-                </p>
+              <div className="fin-panel">
+                <div className="fin-panel-title">
+                  <h2>Events Revenue (Auto)</h2>
+                  <div className="eventura-small-text" style={{ opacity: 0.75 }}>
+                    Confirmed/Completed budgets count as revenue
+                  </div>
+                </div>
 
                 <div className="eventura-table-wrapper">
-                  <table className="eventura-table">
+                  <table className="eventura-table fin-table">
                     <thead>
-                      <tr><th>Date</th><th>Event</th><th>Status</th><th>Budget</th><th></th></tr>
+                      <tr>
+                        <th>Date</th>
+                        <th>Event</th>
+                        <th>Status</th>
+                        <th>Budget</th>
+                        <th />
+                      </tr>
                     </thead>
                     <tbody>
                       {filteredEventRevenue.length === 0 ? (
-                        <tr><td colSpan={5} className="eventura-small-text">No revenue events for this filter.</td></tr>
+                        <tr>
+                          <td colSpan={5} className="eventura-small-text">
+                            No revenue events for this filter.
+                          </td>
+                        </tr>
                       ) : (
                         filteredEventRevenue.map((r) => {
                           const ev = events.find((e) => e.id === r.id);
                           return (
                             <tr key={r.id}>
                               <td>{r.date}</td>
-                              <td><div className="eventura-list-title">{r.title}</div></td>
+                              <td>
+                                <div className="eventura-list-title">{r.title}</div>
+                              </td>
                               <td>{r.status}</td>
                               <td>{INR(r.amount)}</td>
                               <td style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                                 {ev ? (
                                   <>
-                                    <button className="eventura-tag eventura-tag-blue" onClick={() => startEditEvent(ev)}>Edit</button>
-                                    <button className="eventura-tag eventura-tag-amber" onClick={() => deleteEvent(ev.id)}>Delete</button>
+                                    <button className="eventura-tag eventura-tag-blue" type="button" onClick={() => startEditEvent(ev)}>
+                                      Edit
+                                    </button>
+                                    <button className="eventura-tag eventura-tag-amber" type="button" onClick={() => deleteEvent(ev.id)}>
+                                      Delete
+                                    </button>
                                   </>
                                 ) : null}
                               </td>
@@ -736,65 +1098,93 @@ export default function FinancePage() {
                 </div>
 
                 {editingEventId && editingEvent && (
-                  <div className="eventura-card" style={{ marginTop: 12 }}>
+                  <div className="eventura-card" style={{ marginTop: 14 }}>
                     <p className="eventura-card-label">Edit Event</p>
-
-                    <div style={{ display: "grid", gap: 8 }}>
+                    <div style={{ display: "grid", gap: 10 }}>
                       <input className="eventura-search" value={editingEvent.title} onChange={(e) => setEditingEvent({ ...editingEvent, title: e.target.value })} />
-                      <div style={{ display: "flex", gap: 8 }}>
+                      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
                         <input className="eventura-search" type="date" value={editingEvent.date} onChange={(e) => setEditingEvent({ ...editingEvent, date: e.target.value })} />
-                        <select className="eventura-search" value={editingEvent.status} onChange={(e) => setEditingEvent({ ...editingEvent, status: e.target.value as EventStatus })}>
+                        <select
+                          className="eventura-search"
+                          value={editingEvent.status}
+                          onChange={(e) => setEditingEvent({ ...editingEvent, status: e.target.value as EventStatus })}
+                        >
                           <option>Tentative</option>
                           <option>Confirmed</option>
                           <option>Completed</option>
                           <option>Cancelled</option>
                         </select>
+                        <input
+                          className="eventura-search"
+                          type="number"
+                          value={editingEvent.budget || 0}
+                          onChange={(e) => setEditingEvent({ ...editingEvent, budget: Number(e.target.value) || 0 })}
+                        />
                       </div>
-                      <input className="eventura-search" type="number" value={editingEvent.budget || 0} onChange={(e) => setEditingEvent({ ...editingEvent, budget: Number(e.target.value) || 0 })} />
-
-                      <div style={{ display: "flex", gap: 8 }}>
-                        <button className="eventura-button-secondary" onClick={saveEditEvent}>Save</button>
-                        <button className="eventura-tag eventura-tag-amber" onClick={cancelEditEvent}>Cancel</button>
+                      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                        <button className="eventura-button-secondary" type="button" onClick={saveEditEvent}>
+                          Save
+                        </button>
+                        <button className="eventura-tag eventura-tag-amber" type="button" onClick={cancelEditEvent}>
+                          Cancel
+                        </button>
                       </div>
                     </div>
                   </div>
                 )}
               </div>
 
-              <div className="eventura-panel">
-                <h2 className="eventura-panel-title">Quick Notes</h2>
-                <ul className="eventura-bullets">
-                  <li>Event budgets are the main revenue driver. Confirm events to increase revenue.</li>
-                  <li>Use receivable amount to follow up payment pending clients.</li>
-                </ul>
+              <div className="fin-panel fin-ai">
+                <div className="fin-panel-title">
+                  <h2>Collections</h2>
+                  <div className="eventura-small-text" style={{ opacity: 0.75 }}>
+                    AR depends on your toggle
+                  </div>
+                </div>
+
+                <div className="fin-kpi" style={{ borderRadius: 18 }}>
+                  <div className="fin-kpi-label">Receivable</div>
+                  <div className="fin-kpi-value">{INR(receivable)}</div>
+                  <div className="fin-kpi-note">Follow up confirmed clients</div>
+                </div>
               </div>
             </section>
           )}
 
+          {/* BACKUP */}
           {tab === "backup" && (
             <section className="eventura-columns">
-              <div className="eventura-panel">
-                <h2 className="eventura-panel-title">Backup / Restore</h2>
-                <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                  <button className="eventura-button-secondary" onClick={exportJSON}>Export JSON</button>
-                  <button className="eventura-tag eventura-tag-amber" onClick={importJSON}>Import JSON</button>
+              <div className="fin-panel">
+                <div className="fin-panel-title">
+                  <h2>Backup / Restore</h2>
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                    <button className="eventura-button-secondary" type="button" onClick={exportJSON}>
+                      Export JSON
+                    </button>
+                    <button className="eventura-tag eventura-tag-amber" type="button" onClick={importJSON}>
+                      Import JSON
+                    </button>
+                  </div>
                 </div>
 
                 <textarea
                   className="eventura-search"
-                  style={{ width: "100%", height: 240, marginTop: 10 }}
+                  style={{ width: "100%", height: 260 }}
                   placeholder="Export appears here. Paste JSON here to import."
                   value={backupText}
                   onChange={(e) => setBackupText(e.target.value)}
                 />
               </div>
 
-              <div className="eventura-panel">
-                <h2 className="eventura-panel-title">HR Link</h2>
-                <p className="eventura-small-text">
-                  HR cost is auto-calculated from <code>eventura-hr-team</code>. If HR tab is still using seed arrays,
-                  salary won’t update here.
-                </p>
+              <div className="fin-panel">
+                <div className="fin-panel-title">
+                  <h2>Notes</h2>
+                </div>
+                <ul className="eventura-bullets">
+                  <li>Finance is localStorage based. Your deletes stay deleted.</li>
+                  <li>Events revenue is driven by Confirmed/Completed budgets.</li>
+                  <li>HR cost reads from <code>eventura-hr-team</code>.</li>
+                </ul>
               </div>
             </section>
           )}
@@ -804,19 +1194,7 @@ export default function FinancePage() {
   );
 }
 
-/* ================= UI PIECES ================= */
-
-function Card({ label, value, note }: { label: string; value: string; note?: string }) {
-  return (
-    <div className="eventura-card eventura-card-glow">
-      <p className="eventura-card-label">{label}</p>
-      <p className="eventura-card-value">{value}</p>
-      {note ? <p className="eventura-card-note">{note}</p> : null}
-    </div>
-  );
-}
-
-/* ================= Shared layout (kept minimal to avoid breaking) ================= */
+/* ================= Sidebar + Topbar (same style) ================= */
 
 function SidebarCore({ user, active }: { user: User; active: string }) {
   const isCEO = user.role === "CEO";
@@ -861,7 +1239,9 @@ function TopbarCore({ user }: { user: User }) {
         <input className="eventura-search" placeholder="Search finance..." />
       </div>
       <div className="eventura-topbar-right">
-        <button className="eventura-topbar-icon" title="Notifications">🔔</button>
+        <button className="eventura-topbar-icon" title="Notifications">
+          🔔
+        </button>
         <div className="eventura-user-avatar" title={user.name}>
           {user.name.charAt(0).toUpperCase()}
         </div>
