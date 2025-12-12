@@ -123,7 +123,9 @@ function parseDateStr(str: string): Date {
 
 export default function CalendarPage() {
   const [user, setUser] = useState<User | null>(null);
-  const [events, setEvents] = useState<CalendarEvent[]>(seedEvents);
+
+  // 🔧 Start with empty, we’ll load from localStorage or seed
+  const [events, setEvents] = useState<CalendarEvent[]>([]);
 
   const [viewMonth, setViewMonth] = useState<Date>(() => new Date());
   const [selectedDate, setSelectedDate] = useState<string>(() =>
@@ -173,23 +175,32 @@ export default function CalendarPage() {
     }
   }, []);
 
-  // Load events from localStorage
+  // 🔧 Load events from localStorage OR seed once
   useEffect(() => {
     if (typeof window === "undefined") return;
+
     try {
       const stored = window.localStorage.getItem(CAL_EVENTS_KEY);
+
       if (stored) {
         const parsed: CalendarEvent[] = JSON.parse(stored);
-        if (Array.isArray(parsed) && parsed.length > 0) {
+        if (Array.isArray(parsed)) {
+          // ✅ Even [] is valid – don’t bring back seeds
           setEvents(parsed);
+          return;
         }
       }
+
+      // ✅ No stored data → use seed once and save
+      setEvents(seedEvents);
+      window.localStorage.setItem(CAL_EVENTS_KEY, JSON.stringify(seedEvents));
     } catch {
-      // ignore
+      // If anything breaks, at least show seed data
+      setEvents(seedEvents);
     }
   }, []);
 
-  // Persist events
+  // Save events on change
   useEffect(() => {
     if (typeof window === "undefined") return;
     window.localStorage.setItem(CAL_EVENTS_KEY, JSON.stringify(events));
@@ -297,7 +308,9 @@ export default function CalendarPage() {
   };
 
   const handleFormChange = (
-    e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>
+    e: React.ChangeEvent<
+      HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement
+    >
   ) => {
     const { name, value } = e.target;
     setForm((prev) => ({ ...prev, [name]: value }));
