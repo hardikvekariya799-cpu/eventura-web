@@ -113,6 +113,7 @@ export default function EventsPage() {
       window.localStorage.removeItem(USER_KEY);
       window.location.href = "/login";
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // load events
@@ -229,7 +230,12 @@ export default function EventsPage() {
       setEvents((prev) =>
         prev.map((ev) =>
           ev.id === editingId
-            ? { ...ev, ...form, vendors: form.vendors ?? [], issues: form.issues ?? [] }
+            ? {
+                ...ev,
+                ...form,
+                vendors: form.vendors ?? [],
+                issues: form.issues ?? [],
+              }
             : ev
         )
       );
@@ -795,12 +801,15 @@ function EventDetail({
     setIssueDraft("");
   }
 
+  // ✅ FIXED: keep IssueStatus + IssueItem[]
   function handleToggleIssue(id: number) {
-    const next = (event.issues ?? []).map((iss) =>
+    const next: IssueItem[] = (event.issues ?? []).map((iss: IssueItem) =>
       iss.id === id
         ? {
             ...iss,
-            status: iss.status === "Open" ? "Resolved" : "Open",
+            status: (iss.status === "Open"
+              ? "Resolved"
+              : "Open") as IssueStatus,
           }
         : iss
     );
@@ -1092,11 +1101,10 @@ function EventDetail({
 
         {/* Issues */}
         <div className="eventura-panel" style={{ background: "transparent" }}>
-          <h3 className="eventura-panel-title">
-            Issues & on-ground alerts
-          </h3>
+          <h3 className="eventura-panel-title">Issues & on-ground alerts</h3>
           <p className="eventura-small-text">
-            Ground staff can note problems like delays, shortages, vendor issues.
+            Ground staff can note problems like delays, shortages, vendor
+            issues.
           </p>
 
           <form
