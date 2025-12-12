@@ -1,772 +1,773 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
 
-/* ========= Shared types & keys ========= */
+/* ================= AUTH ================= */
 
 type Role = "CEO" | "Staff";
 type User = { name: string; role: Role; city: string };
-
 const USER_KEY = "eventura-user";
-const FINANCE_KEY = "eventura-finance-board";
 
-type FinanceRow = {
+/* ================= DB KEYS (CONNECTED) ================= */
+
+const DB_EVENTS = "eventura-events";
+const DB_FIN = "eventura-finance-transactions";
+const DB_HR = "eventura-hr-team";
+
+/* ================= TYPES ================= */
+
+type EventStatus = "Tentative" | "Confirmed" | "Completed" | "Cancelled";
+
+type EventItem = {
   id: number;
-  label: string;
-  month: string; // "2025-12"
-  income: string;
-  expense: string;
-  category:
-    | "Client Payment"
-    | "Vendor Payment"
-    | "Salary"
-    | "Office & Rent"
-    | "Marketing"
-    | "Travel"
-    | "Investment"
-    | "Other";
-  notes: string;
+  title: string;
+  status: EventStatus;
+  budget?: number;
+  date: string; // YYYY-MM-DD
+  city?: string;
 };
 
-function parseMoney(value: string): number {
-  const cleaned = value.replace(/[₹, ,]/g, "");
-  const n = parseFloat(cleaned);
-  return isNaN(n) ? 0 : n;
+type TxType = "Income" | "Expense";
+
+type FinanceTx = {
+  id: number;
+  type: TxType;
+  date: string; // YYYY-MM-DD
+  category: string;
+  amount: number;
+  note?: string;
+};
+
+type TeamMember = {
+  id: number;
+  status: "Core" | "Freelancer" | "Trainee";
+  monthlySalary: number;
+};
+
+/* ================= UTILS ================= */
+
+const INR = (v: number) => "₹" + Math.round(v || 0).toLocaleString("en-IN");
+
+function today() {
+  return new Date().toISOString().slice(0, 10);
 }
 
-function formatCurrency(value: number): string {
-  return value.toLocaleString("en-IN", {
-    maximumFractionDigits: 0,
-  });
+function safeArray<T>(key: string): T[] {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return [];
+    const data = JSON.parse(raw);
+    return Array.isArray(data) ? data : [];
+  } catch {
+    return [];
+  }
 }
 
-/* ========= MAIN PAGE ========= */
+function nextId(items: { id: number }[]) {
+  return (items.reduce((m, x) => Math.max(m, x.id), 0) || 0) + 1;
+}
+
+function clampPct(v: number) {
+  if (Number.isNaN(v)) return 0;
+  return Math.max(0, Math.min(100, v));
+}
+
+/* ================= PAGE ================= */
 
 export default function FinancePage() {
   const [user, setUser] = useState<User | null>(null);
-  const [rows, setRows] = useState<FinanceRow[]>([]);
-  const [selectedMonth, setSelectedMonth] = useState<string>("");
-  const [filterCategory, setFilterCategory] = useState<string>("All");
 
-  const [draft, setDraft] = useState<Omit<FinanceRow, "id">>({
-    label: "",
-    month: "",
-    income: "",
-    expense: "",
-    category: "Client Payment",
-    notes: "",
+  const [events, setEvents] = useState<EventItem[]>([]);
+  const [tx, setTx] = useState<FinanceTx[]>([]);
+  const [team, setTeam] = useState<TeamMember[]>([]);
+
+  // GST + Settings
+  const [gst, setGst] = useState<number>(18);
+
+  // Add Transaction form
+  const [form, setForm] = useState({
+    type: "Income" as TxType,
+    date: today(),
+    category: "",
+    amount: "",
+    note: "",
   });
 
-  const [editingId, setEditingId] = useState<number | null>(null);
+  // Inline editing
+  const [editingTxId, setEditingTxId] = useState<number | null>(null);
+  const [editingTx, setEditingTx] = useState<FinanceTx | null>(null);
 
-  // Auth: must be logged in (CEO or Staff)
+  const [editingEventId, setEditingEventId] = useState<number | null>(null);
+  const [editingEvent, setEditingEvent] = useState<EventItem | null>(null);
+
+  // AI What-If
+  const [whatIfEvents, setWhatIfEvents] = useState(0);
+  const [whatIfHr, setWhatIfHr] = useState(0);
+  const [whatIfExpenseCut, setWhatIfExpenseCut] = useState(0);
+
+  /* ===== Auth ===== */
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    const raw = window.localStorage.getItem(USER_KEY);
-    if (!raw) {
-      window.location.href = "/login";
-      return;
-    }
+    const raw = localStorage.getItem(USER_KEY);
+    if (!raw) return (window.location.href = "/login");
     try {
       const u: User = JSON.parse(raw);
       setUser(u);
     } catch {
-      window.localStorage.removeItem(USER_KEY);
+      localStorage.removeItem(USER_KEY);
       window.location.href = "/login";
     }
   }, []);
 
-  // Load finance board
+  /* ===== Load Connected Data ===== */
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    const raw = window.localStorage.getItem(FINANCE_KEY);
-    if (!raw) {
-      // seed example
-      const seed: FinanceRow[] = [
-        {
-          id: Date.now(),
-          label: "Patel Wedding Final Payment",
-          month: "2025-12",
-          income: "1200000",
-          expense: "800000",
-          category: "Client Payment",
-          notes: "Includes decor + catering + artist.",
-        },
-        {
-          id: Date.now() + 1,
-          label: "Office & Studio Rent",
-          month: "2025-12",
-          income: "",
-          expense: "75000",
-          category: "Office & Rent",
-          notes: "Eventura Reality Surat.",
-        },
-      ];
-      setRows(seed);
-      window.localStorage.setItem(FINANCE_KEY, JSON.stringify(seed));
-      return;
-    }
-    try {
-      const parsed: FinanceRow[] = JSON.parse(raw);
-      setRows(parsed);
-    } catch {
-      // ignore corrupt data
-    }
+    setEvents(safeArray<EventItem>(DB_EVENTS));
+    setTx(safeArray<FinanceTx>(DB_FIN));
+    setTeam(safeArray<TeamMember>(DB_HR));
+
+    // optional stored GST
+    const storedGst = localStorage.getItem("eventura-fin-gst");
+    if (storedGst) setGst(Number(storedGst) || 18);
   }, []);
 
-  // Persist on change
+  /* ===== Persist ===== */
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    window.localStorage.setItem(FINANCE_KEY, JSON.stringify(rows));
-  }, [rows]);
+    localStorage.setItem(DB_FIN, JSON.stringify(tx));
+  }, [tx]);
 
-  function handleDraftChange(
-    e:
-      | React.ChangeEvent<HTMLInputElement>
-      | React.ChangeEvent<HTMLTextAreaElement>
-      | React.ChangeEvent<HTMLSelectElement>
-  ) {
-    const { name, value } = e.target;
-    setDraft((prev) => ({ ...prev, [name]: value }));
-  }
+  useEffect(() => {
+    localStorage.setItem(DB_EVENTS, JSON.stringify(events));
+  }, [events]);
 
-  function resetDraft() {
-    setEditingId(null);
-    setDraft({
-      label: "",
-      month: "",
-      income: "",
-      expense: "",
-      category: "Client Payment",
-      notes: "",
-    });
-  }
+  useEffect(() => {
+    localStorage.setItem("eventura-fin-gst", String(gst));
+  }, [gst]);
 
-  function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!draft.label || !draft.month) {
-      alert("Please fill at least Title and Month.");
-      return;
+  /* ================= CALCULATIONS ================= */
+
+  const coreHrCost = useMemo(
+    () =>
+      team
+        .filter((m) => m.status === "Core")
+        .reduce((s, m) => s + (m.monthlySalary || 0), 0),
+    [team]
+  );
+
+  const confirmedEventRevenue = useMemo(() => {
+    return events
+      .filter((e) => e.status === "Confirmed" || e.status === "Completed")
+      .reduce((s, e) => s + (e.budget || 0), 0);
+  }, [events]);
+
+  const manualIncome = useMemo(
+    () => tx.filter((t) => t.type === "Income").reduce((s, t) => s + t.amount, 0),
+    [tx]
+  );
+
+  const manualExpense = useMemo(
+    () => tx.filter((t) => t.type === "Expense").reduce((s, t) => s + t.amount, 0),
+    [tx]
+  );
+
+  const totalRevenue = confirmedEventRevenue + manualIncome;
+  const gstAmount = (totalRevenue * clampPct(gst)) / 100;
+  const netRevenue = totalRevenue - gstAmount;
+
+  const profit = netRevenue - manualExpense - coreHrCost;
+
+  // Ratios
+  const ratios = useMemo(() => {
+    const revenue = totalRevenue || 1;
+    const profitMargin = (profit / revenue) * 100;
+    const hrRatio = (coreHrCost / revenue) * 100;
+    const expenseRatio = (manualExpense / revenue) * 100;
+    const netMargin = (profit / revenue) * 100;
+
+    const activeEvents = events.filter((e) => e.status !== "Cancelled").length || 1;
+    const revenuePerEvent = totalRevenue / activeEvents;
+
+    const dailyBurn = manualExpense / 30;
+    const runwayMonths = manualExpense > 0 ? netRevenue / manualExpense : 0;
+
+    return {
+      profitMargin,
+      netMargin,
+      hrRatio,
+      expenseRatio,
+      revenuePerEvent,
+      dailyBurn,
+      runwayMonths,
+    };
+  }, [totalRevenue, profit, coreHrCost, manualExpense, netRevenue, events]);
+
+  /* ================= AI INSIGHTS ================= */
+
+  const aiInsights = useMemo(() => {
+    const list: string[] = [];
+
+    if (totalRevenue === 0) list.push("⚠ No revenue found. Confirm event budgets or add income transactions.");
+    if (ratios.netMargin < 20) list.push("⚠ Net margin below 20%. Reduce costs or increase pricing.");
+    if (ratios.hrRatio > 35) list.push("🚨 HR cost > 35% of revenue. Use freelancers or optimize workload.");
+    if (ratios.expenseRatio > 55) list.push("⚠ Expenses > 55% of revenue. Vendor negotiation needed.");
+    if (ratios.revenuePerEvent < 400000) list.push("📉 Revenue per event is low. Push premium décor / add-ons.");
+    if (ratios.runwayMonths > 0 && ratios.runwayMonths < 3) list.push("🚨 Cash runway under 3 months. Cut spend or speed collections.");
+
+    // Smart event note
+    const tentativeHighBudget = events.filter((e) => e.status === "Tentative" && (e.budget || 0) >= 500000);
+    if (tentativeHighBudget.length > 0) {
+      list.push(`💡 You have ${tentativeHighBudget.length} high-budget tentative event(s). Close them to improve cashflow.`);
     }
 
-    if (editingId == null) {
-      const newRow: FinanceRow = {
-        id: Date.now(),
-        ...draft,
-      };
-      setRows((prev) => [newRow, ...prev]);
-    } else {
-      setRows((prev) =>
-        prev.map((r) => (r.id === editingId ? { ...r, ...draft } : r))
-      );
-    }
+    if (list.length === 0) list.push("✅ Finance looks healthy. Keep margins stable and track vendor costs.");
 
-    resetDraft();
-  }
+    return list;
+  }, [totalRevenue, ratios, events]);
 
-  function handleEdit(row: FinanceRow) {
-    setEditingId(row.id);
-    setDraft({
-      label: row.label,
-      month: row.month,
-      income: row.income,
-      expense: row.expense,
-      category: row.category,
-      notes: row.notes,
-    });
-  }
+  /* ================= WHAT-IF SIM ================= */
 
-  function handleDelete(id: number) {
-    if (!confirm("Delete this record?")) return;
-    setRows((prev) => prev.filter((r) => r.id !== id));
-    if (editingId === id) resetDraft();
-  }
+  const whatIf = useMemo(() => {
+    // simple model assumptions:
+    const avgWeddingRevenue = 600000; // can be adjusted later
+    const addRevenue = whatIfEvents * avgWeddingRevenue;
 
-  function clearMonth(month: string) {
-    if (!confirm(`Clear all entries for ${month}?`)) return;
-    setRows((prev) => prev.filter((r) => r.month !== month));
-  }
+    const hrIncrease = (coreHrCost * clampPct(whatIfHr)) / 100;
+    const expenseCut = (manualExpense * clampPct(whatIfExpenseCut)) / 100;
 
-  /* ========= Calculations ========= */
+    const projectedProfit =
+      (netRevenue + addRevenue) - (manualExpense - expenseCut) - (coreHrCost + hrIncrease);
 
-  const filteredRows = rows.filter((r) => {
-    const monthOk = selectedMonth ? r.month === selectedMonth : true;
-    const catOk =
-      filterCategory === "All" ? true : r.category === filterCategory;
-    return monthOk && catOk;
-  });
+    const notes: string[] = [];
+    if (projectedProfit < 0) notes.push("🚨 Projected loss. Reduce costs or add more bookings.");
+    if (projectedProfit >= 0 && projectedProfit < 300000) notes.push("⚠ Profit is thin. Be careful with spend.");
+    if (projectedProfit >= 500000) notes.push("🚀 Strong projected profit. Scaling looks safe.");
 
-  const summary = useMemo(() => {
-    let totalIncome = 0;
-    let totalExpense = 0;
+    if (whatIfEvents >= 3) notes.push("📈 Check HR capacity before adding 3+ events.");
+    if (whatIfHr > 15) notes.push("⚠ HR increase above 15% can hurt margins quickly.");
 
-    for (const row of filteredRows) {
-      totalIncome += parseMoney(row.income || "0");
-      totalExpense += parseMoney(row.expense || "0");
-    }
+    return { projectedProfit, notes };
+  }, [whatIfEvents, whatIfHr, whatIfExpenseCut, netRevenue, manualExpense, coreHrCost]);
 
-    const profit = totalIncome - totalExpense;
-    const margin = totalIncome
-      ? Math.round((profit / totalIncome) * 100)
-      : 0;
+  /* ================= CRUD ================= */
 
-    // category wise
-    const byCategory: Record<string, { income: number; expense: number }> = {};
-    for (const row of filteredRows) {
-      if (!byCategory[row.category]) {
-        byCategory[row.category] = { income: 0, expense: 0 };
-      }
-      byCategory[row.category].income += parseMoney(row.income || "0");
-      byCategory[row.category].expense += parseMoney(row.expense || "0");
-    }
+  const addTx = () => {
+    const amt = Number(form.amount);
+    if (!form.category.trim()) return alert("Category required");
+    if (!form.date) return alert("Date required");
+    if (!amt || isNaN(amt) || amt <= 0) return alert("Valid amount required");
 
-    return { totalIncome, totalExpense, profit, margin, byCategory };
-  }, [filteredRows]);
+    const item: FinanceTx = {
+      id: nextId(tx),
+      type: form.type,
+      date: form.date,
+      category: form.category.trim(),
+      amount: amt,
+      note: form.note.trim() || undefined,
+    };
+
+    setTx([item, ...tx]);
+    setForm({ ...form, category: "", amount: "", note: "" });
+  };
+
+  const deleteTx = (id: number) => {
+    if (!confirm("Delete this transaction?")) return;
+    setTx(tx.filter((t) => t.id !== id));
+  };
+
+  const startEditTx = (t: FinanceTx) => {
+    setEditingTxId(t.id);
+    setEditingTx({ ...t });
+  };
+
+  const saveEditTx = () => {
+    if (!editingTxId || !editingTx) return;
+    if (!editingTx.category.trim()) return alert("Category required");
+    if (!editingTx.date) return alert("Date required");
+    if (!editingTx.amount || editingTx.amount <= 0) return alert("Valid amount required");
+
+    setTx(tx.map((t) => (t.id === editingTxId ? { ...editingTx, category: editingTx.category.trim() } : t)));
+    setEditingTxId(null);
+    setEditingTx(null);
+  };
+
+  const cancelEditTx = () => {
+    setEditingTxId(null);
+    setEditingTx(null);
+  };
+
+  const deleteEvent = (id: number) => {
+    if (!confirm("Delete this event from Events DB?")) return;
+    setEvents(events.filter((e) => e.id !== id));
+  };
+
+  const startEditEvent = (e: EventItem) => {
+    setEditingEventId(e.id);
+    setEditingEvent({ ...e });
+  };
+
+  const saveEditEvent = () => {
+    if (!editingEventId || !editingEvent) return;
+    if (!editingEvent.title.trim()) return alert("Event title required");
+    if (!editingEvent.date) return alert("Event date required");
+
+    setEvents(
+      events.map((e) =>
+        e.id === editingEventId
+          ? {
+              ...editingEvent,
+              title: editingEvent.title.trim(),
+              budget: editingEvent.budget && editingEvent.budget > 0 ? editingEvent.budget : 0,
+            }
+          : e
+      )
+    );
+    setEditingEventId(null);
+    setEditingEvent(null);
+  };
+
+  const cancelEditEvent = () => {
+    setEditingEventId(null);
+    setEditingEvent(null);
+  };
+
+  /* ================= GUARD ================= */
 
   if (!user) return null;
+  if (user.role !== "CEO") return <div style={{ padding: 20 }}>Finance is CEO-only.</div>;
 
-  const isCEO = user.role === "CEO";
+  /* ================= UI ================= */
+
+  const syncedRevenueRows = events
+    .filter((e) => e.status === "Confirmed" || e.status === "Completed")
+    .sort((a, b) => a.date.localeCompare(b.date));
 
   return (
     <main className="eventura-os">
-      <aside className="eventura-sidebar">
-        <SidebarCore user={user} active="finance" />
-      </aside>
+      <div className="eventura-content">
+        <div className="eventura-header-row">
+          <div>
+            <h1 className="eventura-page-title">Finance Intelligence</h1>
+            <p className="eventura-subtitle">
+              Connected to Events + HR + Dashboard. Everything is editable & removable.
+            </p>
+          </div>
+        </div>
 
-      <div className="eventura-main">
-        <TopbarCore user={user} />
+        {/* KPI */}
+        <section className="eventura-grid">
+          <Card label="Event Revenue (Auto)" value={INR(confirmedEventRevenue)} note="From Confirmed/Completed events" />
+          <Card label="Manual Income" value={INR(manualIncome)} note="From transactions" />
+          <Card label="Total Revenue" value={INR(totalRevenue)} note="Auto + Manual" />
+          <Card label={`GST (${clampPct(gst)}%)`} value={INR(gstAmount)} note="Editable GST rate" />
+          <Card label="Net Revenue" value={INR(netRevenue)} note="After GST" />
+          <Card label="HR Cost (Core)" value={INR(coreHrCost)} note="From HR team DB" />
+          <Card label="Expenses" value={INR(manualExpense)} note="From transactions" />
+          <Card label="Net Profit" value={INR(profit)} note="Net Rev - Expense - HR" />
+        </section>
 
-        <div className="eventura-content">
-          {/* Header */}
-          <div className="eventura-header-row">
-            <div>
-              <h1 className="eventura-page-title">Finance Board</h1>
-              <p className="eventura-subtitle">
-                Track Eventura cashflow: client receipts, vendor payouts, salaries,
-                rent, marketing – all in one purple-black board.
-              </p>
+        {/* Ratios */}
+        <section className="eventura-columns">
+          <div className="eventura-panel">
+            <h2 className="eventura-panel-title">Automatic Ratio Analysis</h2>
+
+            <div className="eventura-table-wrapper">
+              <table className="eventura-table">
+                <thead>
+                  <tr>
+                    <th>Metric</th>
+                    <th>Value</th>
+                    <th>Meaning</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>Net Margin</td>
+                    <td>{ratios.netMargin.toFixed(1)}%</td>
+                    <td>Profit after GST, expenses, HR</td>
+                  </tr>
+                  <tr>
+                    <td>HR Cost Ratio</td>
+                    <td>{ratios.hrRatio.toFixed(1)}%</td>
+                    <td>Core salary cost vs revenue</td>
+                  </tr>
+                  <tr>
+                    <td>Expense Ratio</td>
+                    <td>{ratios.expenseRatio.toFixed(1)}%</td>
+                    <td>Ops + vendor expenses vs revenue</td>
+                  </tr>
+                  <tr>
+                    <td>Revenue per Event</td>
+                    <td>{INR(ratios.revenuePerEvent)}</td>
+                    <td>Helps pricing + package strategy</td>
+                  </tr>
+                  <tr>
+                    <td>Daily Burn (Expense/30)</td>
+                    <td>{INR(ratios.dailyBurn)}</td>
+                    <td>Spending speed indicator</td>
+                  </tr>
+                  <tr>
+                    <td>Cash Runway (months)</td>
+                    <td>{ratios.runwayMonths.toFixed(1)}</td>
+                    <td>Net revenue divided by expenses</td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
-            <div className="eventura-actions">
-              <button
-                type="button"
-                className="eventura-button-secondary"
-                onClick={resetDraft}
-              >
-                + New line
-              </button>
+
+            <div style={{ display: "flex", gap: 10, marginTop: 10, flexWrap: "wrap" }}>
+              <label className="eventura-small-text" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                GST %
+                <input
+                  className="eventura-search"
+                  style={{ width: 120 }}
+                  type="number"
+                  value={gst}
+                  onChange={(e) => setGst(clampPct(Number(e.target.value)))}
+                />
+              </label>
             </div>
           </div>
 
-          {/* Summary cards */}
-          <section className="eventura-grid">
-            <div className="eventura-card eventura-card-glow">
-              <p className="eventura-card-label">Total income</p>
-              <p className="eventura-card-value">
-                ₹{formatCurrency(summary.totalIncome)}
-              </p>
-              <p className="eventura-card-note">
-                All client & other inflows for selected filters.
-              </p>
-            </div>
+          <div className="eventura-panel">
+            <h2 className="eventura-panel-title">AI Finance Co-Pilot</h2>
+            <ul className="eventura-bullets">
+              {aiInsights.map((x, i) => (
+                <li key={i}>{x}</li>
+              ))}
+            </ul>
 
-            <div className="eventura-card eventura-card-glow">
-              <p className="eventura-card-label">Total expense</p>
-              <p className="eventura-card-value">
-                ₹{formatCurrency(summary.totalExpense)}
-              </p>
-              <p className="eventura-card-note">
-                Vendor payouts, salaries, rent, marketing, travel.
-              </p>
-            </div>
+            <h3 className="eventura-subsection-title" style={{ marginTop: 14 }}>
+              What-If Simulator (AI)
+            </h3>
 
-            <div className="eventura-card eventura-card-glow">
-              <p className="eventura-card-label">Net profit</p>
-              <p
-                className="eventura-card-value"
-                style={{ color: summary.profit >= 0 ? "#4ade80" : "#f97373" }}
-              >
-                ₹{formatCurrency(summary.profit)}
-              </p>
-              <p className="eventura-card-note">
-                Margin: {summary.margin}%
-              </p>
-            </div>
-          </section>
-
-          {/* Filters */}
-          <section className="eventura-panel" style={{ marginBottom: "1rem" }}>
-            <h2 className="eventura-panel-title">Filters & month view</h2>
-            <div className="eventura-form-grid">
-              <div className="eventura-field">
-                <label className="eventura-label">Month</label>
+            <div style={{ display: "grid", gap: 8 }}>
+              <label className="eventura-small-text">
+                Add Weddings (assume ₹6,00,000 each)
                 <input
-                  type="month"
-                  className="eventura-input"
-                  value={selectedMonth}
-                  onChange={(e) => setSelectedMonth(e.target.value)}
+                  className="eventura-search"
+                  type="number"
+                  value={whatIfEvents}
+                  onChange={(e) => setWhatIfEvents(Math.max(0, Number(e.target.value) || 0))}
                 />
-              </div>
-              <div className="eventura-field">
-                <label className="eventura-label">Category</label>
-                <select
-                  className="eventura-input"
-                  value={filterCategory}
-                  onChange={(e) => setFilterCategory(e.target.value)}
-                >
-                  <option value="All">All</option>
-                  <option>Client Payment</option>
-                  <option>Vendor Payment</option>
-                  <option>Salary</option>
-                  <option>Office & Rent</option>
-                  <option>Marketing</option>
-                  <option>Travel</option>
-                  <option>Investment</option>
-                  <option>Other</option>
-                </select>
-              </div>
-              {selectedMonth && (
-                <div className="eventura-field" style={{ alignSelf: "flex-end" }}>
-                  <button
-                    type="button"
-                    className="eventura-button-secondary"
-                    onClick={() => clearMonth(selectedMonth)}
-                  >
-                    Clear month
-                  </button>
-                </div>
-              )}
-            </div>
-          </section>
+              </label>
 
-          {/* Main 2-column: Auto calculator + table */}
-          <section
-            className="eventura-columns"
-            style={{
-              gridTemplateColumns: "minmax(0, 1.2fr) minmax(0, 2fr)",
-            }}
-          >
-            {/* Left: Auto calculator form */}
-            <div className="eventura-panel finance-panel-gradient">
-              <h2 className="eventura-panel-title">Add transaction</h2>
-              <form className="eventura-form" onSubmit={handleSubmit}>
-                <div className="eventura-field">
-                  <label className="eventura-label" htmlFor="label">
-                    Title
-                  </label>
-                  <input
-                    id="label"
-                    name="label"
-                    className="eventura-input"
-                    value={draft.label}
-                    onChange={handleDraftChange}
-                    placeholder="e.g. Mehta Wedding advance, Vendor payout, Office rent"
-                  />
-                </div>
+              <label className="eventura-small-text">
+                HR increase %
+                <input
+                  className="eventura-search"
+                  type="number"
+                  value={whatIfHr}
+                  onChange={(e) => setWhatIfHr(clampPct(Number(e.target.value)))}
+                />
+              </label>
 
-                <div className="eventura-form-grid">
-                  <div className="eventura-field">
-                    <label className="eventura-label" htmlFor="month">
-                      Month
-                    </label>
-                    <input
-                      id="month"
-                      name="month"
-                      type="month"
-                      className="eventura-input"
-                      value={draft.month}
-                      onChange={handleDraftChange}
-                    />
-                  </div>
-                  <div className="eventura-field">
-                    <label className="eventura-label" htmlFor="category">
-                      Category
-                    </label>
-                    <select
-                      id="category"
-                      name="category"
-                      className="eventura-input"
-                      value={draft.category}
-                      onChange={handleDraftChange}
-                    >
-                      <option>Client Payment</option>
-                      <option>Vendor Payment</option>
-                      <option>Salary</option>
-                      <option>Office & Rent</option>
-                      <option>Marketing</option>
-                      <option>Travel</option>
-                      <option>Investment</option>
-                      <option>Other</option>
-                    </select>
-                  </div>
-                </div>
+              <label className="eventura-small-text">
+                Expense cut %
+                <input
+                  className="eventura-search"
+                  type="number"
+                  value={whatIfExpenseCut}
+                  onChange={(e) => setWhatIfExpenseCut(clampPct(Number(e.target.value)))}
+                />
+              </label>
 
-                <div className="eventura-form-grid">
-                  <div className="eventura-field">
-                    <label className="eventura-label" htmlFor="income">
-                      Income (₹)
-                    </label>
-                    <input
-                      id="income"
-                      name="income"
-                      className="eventura-input"
-                      value={draft.income}
-                      onChange={handleDraftChange}
-                      placeholder="Only numbers, no comma"
-                    />
-                  </div>
-                  <div className="eventura-field">
-                    <label className="eventura-label" htmlFor="expense">
-                      Expense (₹)
-                    </label>
-                    <input
-                      id="expense"
-                      name="expense"
-                      className="eventura-input"
-                      value={draft.expense}
-                      onChange={handleDraftChange}
-                      placeholder="Vendor payout, salary etc."
-                    />
-                  </div>
-                </div>
-
-                <div className="eventura-field">
-                  <label className="eventura-label" htmlFor="notes">
-                    Notes
-                  </label>
-                  <textarea
-                    id="notes"
-                    name="notes"
-                    className="eventura-textarea"
-                    value={draft.notes}
-                    onChange={handleDraftChange}
-                    placeholder="Vendor name, client, payment stage, anything important…"
-                  />
-                </div>
-
-                <div className="eventura-actions">
-                  <button type="submit" className="eventura-button">
-                    {editingId ? "Update line" : "Add line"}
-                  </button>
-                  {editingId && (
-                    <button
-                      type="button"
-                      className="eventura-button-secondary"
-                      onClick={resetDraft}
-                    >
-                      Cancel edit
-                    </button>
-                  )}
-                </div>
-              </form>
-
-              <div
-                className="eventura-panel"
-                style={{
-                  marginTop: "1rem",
-                  background:
-                    "radial-gradient(circle at top, rgba(168,85,247,0.35), rgba(15,23,42,0.95))",
-                }}
-              >
-                <h3 className="eventura-panel-title">
-                  Month snapshot (current filters)
-                </h3>
-                <ul className="eventura-bullets">
-                  <li>
-                    Gross inflow: ₹{formatCurrency(summary.totalIncome)}
-                  </li>
-                  <li>
-                    Gross outflow: ₹{formatCurrency(summary.totalExpense)}
-                  </li>
-                  <li>
-                    Net:{" "}
-                    <span
-                      style={{
-                        color: summary.profit >= 0 ? "#4ade80" : "#f97373",
-                      }}
-                    >
-                      ₹{formatCurrency(summary.profit)}
-                    </span>{" "}
-                    ({summary.margin}% margin)
-                  </li>
+              <div className="eventura-card">
+                <p className="eventura-card-label">Projected Profit</p>
+                <p className="eventura-card-value">{INR(whatIf.projectedProfit)}</p>
+                <ul className="eventura-bullets" style={{ marginTop: 8 }}>
+                  {whatIf.notes.map((n, i) => (
+                    <li key={i}>{n}</li>
+                  ))}
                 </ul>
               </div>
             </div>
+          </div>
+        </section>
 
-            {/* Right: Table */}
-            <div className="eventura-panel finance-panel-gradient">
-              <h2 className="eventura-panel-title">Transactions</h2>
-              <p className="eventura-small-text">
-                This table is saved in your browser. In future, we can sync with
-                real accounting (Zoho/QuickBooks) using Eventura ecosystem.
-              </p>
+        {/* Event Revenue (Editable) + Transactions (Editable) */}
+        <section className="eventura-columns">
+          {/* EVENT REVENUE LIST */}
+          <div className="eventura-panel">
+            <h2 className="eventura-panel-title">Event Revenue (Auto-Synced)</h2>
+            <p className="eventura-small-text">
+              Only <b>Confirmed</b> and <b>Completed</b> events count as revenue. You can edit budgets/status here.
+            </p>
 
-              <div className="eventura-table-wrapper" style={{ marginTop: "0.5rem" }}>
-                {filteredRows.length === 0 ? (
-                  <p style={{ fontSize: "0.8rem", color: "#9ca3af" }}>
-                    No entries match this filter. Add a row on the left or reset
-                    filters.
-                  </p>
-                ) : (
-                  <table className="eventura-table">
-                    <thead>
-                      <tr>
-                        <th>Month</th>
-                        <th>Title</th>
-                        <th>Category</th>
-                        <th>Income</th>
-                        <th>Expense</th>
-                        <th>Net</th>
-                        <th />
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filteredRows.map((row) => {
-                        const income = parseMoney(row.income || "0");
-                        const expense = parseMoney(row.expense || "0");
-                        const net = income - expense;
-                        return (
-                          <tr key={row.id}>
-                            <td>
-                              {row.month
-                                ? row.month.replace("-", " / ")
-                                : "–"}
-                            </td>
-                            <td>
-                              <div className="eventura-list-title">
-                                {row.label}
-                              </div>
-                              <div className="eventura-list-sub">
-                                {row.notes || "No notes"}
-                              </div>
-                            </td>
-                            <td>{row.category}</td>
-                            <td>
-                              {income
-                                ? `₹${formatCurrency(income)}`
-                                : "–"}
-                            </td>
-                            <td>
-                              {expense
-                                ? `₹${formatCurrency(expense)}`
-                                : "–"}
-                            </td>
-                            <td
-                              style={{
-                                color: net >= 0 ? "#4ade80" : "#f97373",
-                              }}
-                            >
-                              {net ? `₹${formatCurrency(net)}` : "–"}
-                            </td>
-                            <td>
-                              <div
-                                style={{
-                                  display: "flex",
-                                  gap: "0.3rem",
-                                  justifyContent: "flex-end",
-                                }}
-                              >
-                                <button
-                                  type="button"
-                                  className="eventura-tag eventura-tag-blue"
-                                  onClick={() => handleEdit(row)}
-                                >
-                                  Edit
-                                </button>
-                                <button
-                                  type="button"
-                                  className="eventura-tag eventura-tag-amber"
-                                  onClick={() => handleDelete(row.id)}
-                                >
-                                  Delete
-                                </button>
-                              </div>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                )}
+            <div className="eventura-table-wrapper">
+              <table className="eventura-table">
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Event</th>
+                    <th>Status</th>
+                    <th>Budget</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {syncedRevenueRows.length === 0 && (
+                    <tr>
+                      <td colSpan={5} className="eventura-small-text">
+                        No Confirmed/Completed events with budgets yet.
+                      </td>
+                    </tr>
+                  )}
+
+                  {syncedRevenueRows.map((e) => (
+                    <tr key={e.id}>
+                      <td>{e.date}</td>
+                      <td>
+                        <div className="eventura-list-title">{e.title}</div>
+                        <div className="eventura-list-sub">{e.city || "Surat"}</div>
+                      </td>
+                      <td>{e.status}</td>
+                      <td>{INR(e.budget || 0)}</td>
+                      <td style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        <button
+                          className="eventura-tag eventura-tag-blue"
+                          type="button"
+                          onClick={() => startEditEvent(e)}
+                        >
+                          Edit
+                        </button>
+                        <button
+                          className="eventura-tag eventura-tag-amber"
+                          type="button"
+                          onClick={() => deleteEvent(e.id)}
+                        >
+                          Delete
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* EDIT EVENT */}
+            {editingEventId && editingEvent && (
+              <div className="eventura-card" style={{ marginTop: 12 }}>
+                <p className="eventura-card-label">Edit Event Revenue Item</p>
+
+                <div style={{ display: "grid", gap: 8 }}>
+                  <input
+                    className="eventura-search"
+                    value={editingEvent.title}
+                    onChange={(ev) =>
+                      setEditingEvent({ ...editingEvent, title: ev.target.value })
+                    }
+                    placeholder="Event title"
+                  />
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <input
+                      type="date"
+                      className="eventura-search"
+                      value={editingEvent.date}
+                      onChange={(ev) =>
+                        setEditingEvent({ ...editingEvent, date: ev.target.value })
+                      }
+                    />
+                    <select
+                      className="eventura-search"
+                      value={editingEvent.status}
+                      onChange={(ev) =>
+                        setEditingEvent({
+                          ...editingEvent,
+                          status: ev.target.value as EventStatus,
+                        })
+                      }
+                    >
+                      <option>Tentative</option>
+                      <option>Confirmed</option>
+                      <option>Completed</option>
+                      <option>Cancelled</option>
+                    </select>
+                  </div>
+                  <input
+                    className="eventura-search"
+                    type="number"
+                    value={editingEvent.budget || 0}
+                    onChange={(ev) =>
+                      setEditingEvent({
+                        ...editingEvent,
+                        budget: Number(ev.target.value) || 0,
+                      })
+                    }
+                    placeholder="Budget"
+                  />
+
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button className="eventura-button-secondary" type="button" onClick={saveEditEvent}>
+                      Save
+                    </button>
+                    <button className="eventura-tag eventura-tag-amber" type="button" onClick={cancelEditEvent}>
+                      Cancel
+                    </button>
+                  </div>
+                </div>
               </div>
-            </div>
-          </section>
+            )}
+          </div>
 
-          {/* Category breakdown */}
-          <section className="eventura-panel" style={{ marginTop: "1rem" }}>
-            <h2 className="eventura-panel-title">Category breakdown</h2>
-            <div
-              className="eventura-grid"
-              style={{ gridTemplateColumns: "repeat(auto-fit, minmax(180px,1fr))" }}
-            >
-              {Object.entries(summary.byCategory).map(
-                ([cat, { income, expense }]) => {
-                  const net = income - expense;
-                  return (
-                    <div key={cat} className="eventura-card">
-                      <p className="eventura-card-label">{cat}</p>
-                      <p className="eventura-card-note">
-                        Income: ₹{formatCurrency(income)}
-                      </p>
-                      <p className="eventura-card-note">
-                        Expense: ₹{formatCurrency(expense)}
-                      </p>
-                      <p
-                        className="eventura-card-note"
-                        style={{
-                          color: net >= 0 ? "#4ade80" : "#f97373",
-                          marginTop: "0.4rem",
-                        }}
-                      >
-                        Net: ₹{formatCurrency(net)}
-                      </p>
-                    </div>
-                  );
-                }
-              )}
-              {Object.keys(summary.byCategory).length === 0 && (
-                <p style={{ fontSize: "0.8rem", color: "#9ca3af" }}>
-                  Add some data to see category-wise breakdown.
-                </p>
-              )}
+          {/* TRANSACTIONS */}
+          <div className="eventura-panel">
+            <h2 className="eventura-panel-title">Transactions (Editable Ledger)</h2>
+
+            {/* Add form */}
+            <div style={{ display: "grid", gap: 8, marginBottom: 12 }}>
+              <div style={{ display: "flex", gap: 8 }}>
+                <select
+                  className="eventura-search"
+                  value={form.type}
+                  onChange={(e) => setForm({ ...form, type: e.target.value as TxType })}
+                >
+                  <option>Income</option>
+                  <option>Expense</option>
+                </select>
+
+                <input
+                  type="date"
+                  className="eventura-search"
+                  value={form.date}
+                  onChange={(e) => setForm({ ...form, date: e.target.value })}
+                />
+              </div>
+
+              <input
+                className="eventura-search"
+                placeholder="Category (Booking / Vendor / Salary / Rent / Ads...)"
+                value={form.category}
+                onChange={(e) => setForm({ ...form, category: e.target.value })}
+              />
+              <input
+                className="eventura-search"
+                placeholder="Amount"
+                value={form.amount}
+                onChange={(e) => setForm({ ...form, amount: e.target.value })}
+              />
+              <input
+                className="eventura-search"
+                placeholder="Note (optional)"
+                value={form.note}
+                onChange={(e) => setForm({ ...form, note: e.target.value })}
+              />
+
+              <button className="eventura-button-secondary" type="button" onClick={addTx}>
+                Add Transaction
+              </button>
             </div>
-          </section>
-        </div>
+
+            {/* Table */}
+            <div className="eventura-table-wrapper">
+              <table className="eventura-table">
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Type</th>
+                    <th>Category</th>
+                    <th>Amount</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {tx.length === 0 && (
+                    <tr>
+                      <td colSpan={5} className="eventura-small-text">
+                        No transactions yet.
+                      </td>
+                    </tr>
+                  )}
+                  {tx.map((t) => (
+                    <tr key={t.id}>
+                      <td>{t.date}</td>
+                      <td>{t.type}</td>
+                      <td>
+                        <div className="eventura-list-title">{t.category}</div>
+                        <div className="eventura-list-sub">{t.note || ""}</div>
+                      </td>
+                      <td>{INR(t.amount)}</td>
+                      <td style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        <button className="eventura-tag eventura-tag-blue" type="button" onClick={() => startEditTx(t)}>
+                          Edit
+                        </button>
+                        <button className="eventura-tag eventura-tag-amber" type="button" onClick={() => deleteTx(t.id)}>
+                          Delete
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Edit transaction */}
+            {editingTxId && editingTx && (
+              <div className="eventura-card" style={{ marginTop: 12 }}>
+                <p className="eventura-card-label">Edit Transaction</p>
+
+                <div style={{ display: "grid", gap: 8 }}>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <select
+                      className="eventura-search"
+                      value={editingTx.type}
+                      onChange={(e) => setEditingTx({ ...editingTx, type: e.target.value as TxType })}
+                    >
+                      <option>Income</option>
+                      <option>Expense</option>
+                    </select>
+
+                    <input
+                      type="date"
+                      className="eventura-search"
+                      value={editingTx.date}
+                      onChange={(e) => setEditingTx({ ...editingTx, date: e.target.value })}
+                    />
+                  </div>
+
+                  <input
+                    className="eventura-search"
+                    value={editingTx.category}
+                    onChange={(e) => setEditingTx({ ...editingTx, category: e.target.value })}
+                    placeholder="Category"
+                  />
+                  <input
+                    className="eventura-search"
+                    type="number"
+                    value={editingTx.amount}
+                    onChange={(e) => setEditingTx({ ...editingTx, amount: Number(e.target.value) || 0 })}
+                    placeholder="Amount"
+                  />
+                  <input
+                    className="eventura-search"
+                    value={editingTx.note || ""}
+                    onChange={(e) => setEditingTx({ ...editingTx, note: e.target.value })}
+                    placeholder="Note"
+                  />
+
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button className="eventura-button-secondary" type="button" onClick={saveEditTx}>
+                      Save
+                    </button>
+                    <button className="eventura-tag eventura-tag-amber" type="button" onClick={cancelEditTx}>
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </section>
       </div>
     </main>
   );
 }
 
-/* ========= Common layout components (same style as other tabs) ========= */
+/* ================= UI PIECES ================= */
 
-function SidebarCore({ user, active }: { user: User; active: string }) {
-  const isCEO = user.role === "CEO";
+function Card({ label, value, note }: { label: string; value: string; note?: string }) {
   return (
-    <>
-      <div className="eventura-sidebar-header">
-        <div className="eventura-logo-circle">E</div>
-        <div className="eventura-logo-text">
-          <div className="eventura-logo-name">Eventura OS</div>
-          <div className="eventura-logo-tagline">
-            Events that speak your style
-          </div>
-        </div>
-      </div>
-      <nav className="eventura-sidebar-nav">
-        <SidebarLink
-          href="/"
-          label="Dashboard"
-          icon="📊"
-          active={active === "dashboard"}
-        />
-        <SidebarLink
-          href="/events"
-          label="Events"
-          icon="🎉"
-          active={active === "events"}
-        />
-        <SidebarLink
-          href="/calendar"
-          label="Calendar"
-          icon="📅"
-          active={active === "calendar"}
-        />
-        <SidebarLink
-          href="/leads"
-          label="Clients & Leads"
-          icon="👥"
-          active={active === "leads"}
-        />
-        <SidebarLink
-          href="/vendors"
-          label="Vendors"
-          icon="🤝"
-          active={active === "vendors"}
-        />
-        {isCEO && (
-          <SidebarLink
-            href="/finance"
-            label="Finance"
-            icon="💰"
-            active={active === "finance"}
-          />
-        )}
-        <SidebarLink
-          href="/hr"
-          label="HR & Team"
-          icon="🧑‍💼"
-          active={active === "hr"}
-        />
-        <SidebarLink
-          href="/inventory"
-          label="Inventory & Assets"
-          icon="📦"
-          active={active === "inventory"}
-        />
-        {isCEO && (
-          <SidebarLink
-            href="/reports"
-            label="Reports & Analytics"
-            icon="📈"
-            active={active === "reports"}
-          />
-        )}
-        {isCEO && (
-          <SidebarLink
-            href="/settings"
-            label="Settings & Access"
-            icon="⚙️"
-            active={active === "settings"}
-          />
-        )}
-      </nav>
-      <div className="eventura-sidebar-footer">
-        <div className="eventura-sidebar-role">
-          Role: {user.role === "CEO" ? "CEO / Super Admin" : "Staff"}
-        </div>
-        <div className="eventura-sidebar-city">City: {user.city}</div>
-      </div>
-    </>
-  );
-}
-
-function TopbarCore({ user }: { user: User }) {
-  return (
-    <header className="eventura-topbar">
-      <div className="eventura-topbar-left">
-        <div className="eventura-topbar-location">📍 {user.city}, Gujarat</div>
-      </div>
-      <div className="eventura-topbar-center">
-        <input
-          className="eventura-search"
-          placeholder="Search events, finance, vendors..."
-        />
-      </div>
-      <div className="eventura-topbar-right">
-        <button className="eventura-topbar-icon" title="Notifications">
-          🔔
-        </button>
-        <div className="eventura-user-avatar" title={user.name}>
-          {user.name.charAt(0).toUpperCase()}
-        </div>
-      </div>
-    </header>
-  );
-}
-
-function SidebarLink(props: {
-  href: string;
-  label: string;
-  icon: string;
-  active?: boolean;
-}) {
-  const className =
-    "eventura-sidebar-link" +
-    (props.active ? " eventura-sidebar-link-active" : "");
-  return (
-    <Link href={props.href} className={className}>
-      <span className="eventura-sidebar-icon">{props.icon}</span>
-      <span>{props.label}</span>
-    </Link>
+    <div className="eventura-card eventura-card-glow">
+      <p className="eventura-card-label">{label}</p>
+      <p className="eventura-card-value">{value}</p>
+      {note ? <p className="eventura-card-note">{note}</p> : null}
+    </div>
   );
 }
