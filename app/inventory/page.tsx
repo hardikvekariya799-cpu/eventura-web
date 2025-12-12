@@ -65,7 +65,6 @@ type InventoryItem = {
 };
 
 type ReportsConfig = {
-  // section visibility (removable)
   sections: {
     executive: boolean;
     trend: boolean;
@@ -75,14 +74,12 @@ type ReportsConfig = {
     events: boolean;
     exports: boolean;
   };
-  // editable thresholds
   thresholds: {
-    burnoutWorkloadPct: number; // default 85
-    hrCostRatioPct: number; // default 35
+    burnoutWorkloadPct: number; // 0..100
+    hrCostRatioPct: number; // 0..100
     lowStockRule: "LEQ_MIN" | "LEQ_MIN_PLUS5";
-    marginWarnPct: number; // default 20
+    marginWarnPct: number; // 0..100
   };
-  // filters
   filter: {
     month: string; // "ALL" or YYYY-MM
   };
@@ -108,15 +105,17 @@ function safeObj<T>(key: string, fallback: T): T {
   try {
     const raw = localStorage.getItem(key);
     if (!raw) return fallback;
-    return { ...fallback, ...JSON.parse(raw) };
+    const parsed = JSON.parse(raw);
+    return { ...fallback, ...parsed };
   } catch {
     return fallback;
   }
 }
 
 function clamp(n: number, min: number, max: number) {
-  if (Number.isNaN(n)) return min;
-  return Math.max(min, Math.min(max, n));
+  const x = Number(n);
+  if (Number.isNaN(x)) return min;
+  return Math.max(min, Math.min(max, x));
 }
 
 function toCSV(rows: Record<string, any>[]) {
@@ -124,15 +123,22 @@ function toCSV(rows: Record<string, any>[]) {
   const cols = Array.from(new Set(rows.flatMap((r) => Object.keys(r))));
   const esc = (v: any) => {
     const s = String(v ?? "");
-    if (s.includes('"') || s.includes(",") || s.includes("\n")) return `"${s.replaceAll('"', '""')}"`;
+    if (s.includes('"') || s.includes(",") || s.includes("\n"))
+      return `"${s.replaceAll('"', '""')}"`;
     return s;
   };
   const head = cols.map(esc).join(",");
-  const body = rows.map((r) => cols.map((c) => esc(r[c])).join(",")).join("\n");
+  const body = rows
+    .map((r) => cols.map((c) => esc(r[c])).join(","))
+    .join("\n");
   return head + "\n" + body;
 }
 
-async function downloadText(filename: string, content: string, mime = "text/plain") {
+async function downloadText(
+  filename: string,
+  content: string,
+  mime = "text/plain"
+) {
   const blob = new Blob([content], { type: mime });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -142,7 +148,7 @@ async function downloadText(filename: string, content: string, mime = "text/plai
   URL.revokeObjectURL(url);
 }
 
-/* ================= SIMPLE CHART (CANVAS) ================= */
+/* ================= SIMPLE CANVAS CHART ================= */
 function useCanvasSize() {
   const ref = useRef<HTMLCanvasElement | null>(null);
   const [w, setW] = useState(680);
@@ -174,8 +180,6 @@ function drawLines(
   const H = canvas.height;
 
   ctx.clearRect(0, 0, W, H);
-
-  // background
   ctx.fillStyle = "rgba(255,255,255,0.03)";
   ctx.fillRect(0, 0, W, H);
 
@@ -186,9 +190,11 @@ function drawLines(
   const cw = W - padL - padR;
   const ch = H - padT - padB;
 
-  const maxV = Math.max(1, ...series.flatMap((s) => s.values.map((v) => v || 0)));
+  const maxV = Math.max(
+    1,
+    ...series.flatMap((s) => s.values.map((v) => v || 0))
+  );
 
-  // grid
   ctx.strokeStyle = "rgba(255,255,255,0.10)";
   ctx.lineWidth = 1;
   ctx.font = "12px system-ui";
@@ -205,7 +211,6 @@ function drawLines(
     ctx.fillText((tick / 1000).toFixed(0) + "k", 10, y + 4);
   }
 
-  // x labels
   ctx.fillStyle = "rgba(255,255,255,0.65)";
   for (let i = 0; i < labels.length; i++) {
     if (labels.length <= 1) break;
@@ -215,7 +220,6 @@ function drawLines(
     }
   }
 
-  // series line (neutral white alphas)
   const alphas = [1, 0.7, 0.45];
   series.forEach((s, idx) => {
     ctx.strokeStyle = `rgba(255,255,255,${alphas[idx % alphas.length]})`;
@@ -223,7 +227,8 @@ function drawLines(
 
     ctx.beginPath();
     s.values.forEach((v, i) => {
-      const x = labels.length <= 1 ? padL : padL + (cw * i) / (labels.length - 1);
+      const x =
+        labels.length <= 1 ? padL : padL + (cw * i) / (labels.length - 1);
       const y = padT + ch - (ch * (v || 0)) / maxV;
       if (i === 0) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
@@ -231,7 +236,6 @@ function drawLines(
     ctx.stroke();
   });
 
-  // legend
   ctx.fillStyle = "rgba(255,255,255,0.82)";
   let lx = padL;
   const ly = 13;
@@ -270,17 +274,17 @@ export default function ReportsPage() {
   };
 
   const [cfg, setCfg] = useState<ReportsConfig>(defaultCfg);
-
   const [backupText, setBackupText] = useState("");
 
   const { ref: chartRef, w: chartW } = useCanvasSize();
 
-  /* ===== AUTH ===== */
+  // Auth
   useEffect(() => {
     const raw = localStorage.getItem(USER_KEY);
     if (!raw) return (window.location.href = "/login");
     try {
       const u: User = JSON.parse(raw);
+      if (u.role !== "CEO") return (window.location.href = "/");
       setUser(u);
     } catch {
       localStorage.removeItem(USER_KEY);
@@ -288,7 +292,7 @@ export default function ReportsPage() {
     }
   }, []);
 
-  /* ===== LOAD ===== */
+  // Load
   useEffect(() => {
     setEvents(safeArray<EventItem>(DB_EVENTS));
     setTx(safeArray<FinanceTx>(DB_FIN));
@@ -298,19 +302,11 @@ export default function ReportsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /* ===== PERSIST (this fixes “I hide/delete but it comes back”) ===== */
+  // Persist (fixes "comes back")
   useEffect(() => {
     localStorage.setItem(DB_REPORTS_CFG, JSON.stringify(cfg));
   }, [cfg]);
 
-  /* ===== CEO ONLY (optional) ===== */
-  if (user && user.role !== "CEO") {
-    return (
-      <div style={{ padding: 18 }}>
-        Reports & Analytics is CEO-only.
-      </div>
-    );
-  }
   if (!user) return null;
 
   /* ================= FILTERS ================= */
@@ -339,17 +335,20 @@ export default function ReportsPage() {
   }, [filteredEvents]);
 
   const income = useMemo(() => {
-    return filteredTx.filter((t) => t.type === "Income").reduce((s, t) => s + (t.amount || 0), 0);
+    return filteredTx
+      .filter((t) => t.type === "Income")
+      .reduce((s, t) => s + (t.amount || 0), 0);
   }, [filteredTx]);
 
   const expense = useMemo(() => {
-    return filteredTx.filter((t) => t.type === "Expense").reduce((s, t) => s + (t.amount || 0), 0);
+    return filteredTx
+      .filter((t) => t.type === "Expense")
+      .reduce((s, t) => s + (t.amount || 0), 0);
   }, [filteredTx]);
 
   const revenue = income + autoEventRevenue;
 
   const hrCost = useMemo(() => {
-    // Use core staff only for monthly run
     const core = team.filter((m) => m.status === "Core");
     return core.reduce((s, m) => s + (m.monthlySalary || 0), 0);
   }, [team]);
@@ -359,6 +358,13 @@ export default function ReportsPage() {
   const hrRatioPct = revenue > 0 ? (hrCost / revenue) * 100 : 0;
   const marginPct = revenue > 0 ? (netProfit / revenue) * 100 : 0;
 
+  const invValue = useMemo(() => {
+    return inv.reduce(
+      (s, i) => s + (i.unitCost || 0) * Math.max(0, i.qtyOnHand || 0),
+      0
+    );
+  }, [inv]);
+
   const lowStockCount = useMemo(() => {
     const rule = cfg.thresholds.lowStockRule;
     return inv.filter((i) => {
@@ -367,10 +373,6 @@ export default function ReportsPage() {
       return (i.qtyOnHand || 0) <= threshold;
     }).length;
   }, [inv, cfg.thresholds.lowStockRule]);
-
-  const invValue = useMemo(() => {
-    return inv.reduce((s, i) => s + (i.unitCost || 0) * Math.max(0, i.qtyOnHand || 0), 0);
-  }, [inv]);
 
   const avgWorkload = useMemo(() => {
     const core = team.filter((m) => m.status === "Core");
@@ -422,9 +424,13 @@ export default function ReportsPage() {
     });
 
     const months = Array.from(map.keys()).sort();
-    const revenueByMonth = months.map((m) => (map.get(m)!.rev || 0) + (map.get(m)!.ev || 0));
+    const revenueByMonth = months.map(
+      (m) => (map.get(m)!.rev || 0) + (map.get(m)!.ev || 0)
+    );
     const expenseByMonth = months.map((m) => map.get(m)!.exp || 0);
-    const profitByMonth = months.map((_, i) => revenueByMonth[i] - expenseByMonth[i] - hrCost /* approx */);
+    const profitByMonth = months.map(
+      (_, i) => revenueByMonth[i] - expenseByMonth[i] - hrCost
+    );
 
     return { months, revenueByMonth, expenseByMonth, profitByMonth };
   }, [tx, events, hrCost]);
@@ -440,34 +446,78 @@ export default function ReportsPage() {
     ]);
   }, [chartRef, chartW, monthlySeries]);
 
-  /* ================= AI INSIGHTS (REAL RULES) ================= */
+  /* ================= AI INSIGHTS ================= */
   const aiInsights = useMemo(() => {
     const insights: { tone: "good" | "warn" | "bad"; text: string }[] = [];
 
-    if (revenue === 0) insights.push({ tone: "warn", text: "No revenue detected. Add event budgets (Confirmed/Completed) or add Income transactions." });
+    if (revenue === 0)
+      insights.push({
+        tone: "warn",
+        text: "No revenue detected. Add event budgets (Confirmed/Completed) or add Income transactions.",
+      });
 
-    if (marginPct < 0) insights.push({ tone: "bad", text: `You are running at a LOSS. Margin ${marginPct.toFixed(1)}%. Reduce expenses or raise pricing.` });
-    else if (marginPct < cfg.thresholds.marginWarnPct) insights.push({ tone: "warn", text: `Margin is low (${marginPct.toFixed(1)}%). Target ≥ ${cfg.thresholds.marginWarnPct}%.` });
-    else insights.push({ tone: "good", text: `Margin healthy at ${marginPct.toFixed(1)}%. Keep premium pricing discipline.` });
+    if (marginPct < 0)
+      insights.push({
+        tone: "bad",
+        text: `You are running at a LOSS. Margin ${marginPct.toFixed(
+          1
+        )}%. Reduce expenses or raise pricing.`,
+      });
+    else if (marginPct < cfg.thresholds.marginWarnPct)
+      insights.push({
+        tone: "warn",
+        text: `Margin is low (${marginPct.toFixed(
+          1
+        )}%). Target ≥ ${cfg.thresholds.marginWarnPct}%.`,
+      });
+    else
+      insights.push({
+        tone: "good",
+        text: `Margin healthy at ${marginPct.toFixed(
+          1
+        )}%. Keep premium pricing discipline.`,
+      });
 
     if (hrRatioPct > cfg.thresholds.hrCostRatioPct) {
-      insights.push({ tone: "warn", text: `HR cost ratio ${hrRatioPct.toFixed(1)}% exceeds ${cfg.thresholds.hrCostRatioPct}%. Use freelancers during peaks or grow revenue.` });
+      insights.push({
+        tone: "warn",
+        text: `HR cost ratio ${hrRatioPct.toFixed(
+          1
+        )}% exceeds ${cfg.thresholds.hrCostRatioPct}%. Use freelancers during peaks or grow revenue.`,
+      });
     }
 
     if (burnoutList.length) {
-      insights.push({ tone: "warn", text: `Burnout risk: ${burnoutList.length} core staff above ${cfg.thresholds.burnoutWorkloadPct}% workload.` });
+      insights.push({
+        tone: "warn",
+        text: `Burnout risk: ${burnoutList.length} core staff above ${cfg.thresholds.burnoutWorkloadPct}% workload.`,
+      });
     } else {
-      insights.push({ tone: "good", text: "No burnout alerts based on current workload threshold." });
+      insights.push({
+        tone: "good",
+        text: "No burnout alerts based on current workload threshold.",
+      });
     }
 
     if (lowStockCount > 0) {
-      insights.push({ tone: "warn", text: `Inventory alert: ${lowStockCount} item(s) low stock (rule: ${cfg.thresholds.lowStockRule}). Reorder before peak events.` });
+      insights.push({
+        tone: "warn",
+        text: `Inventory alert: ${lowStockCount} item(s) low stock (rule: ${cfg.thresholds.lowStockRule}). Reorder before peak events.`,
+      });
     }
 
-    if (!insights.length) insights.push({ tone: "good", text: "All systems stable." });
-
-    return insights;
-  }, [revenue, marginPct, cfg.thresholds.marginWarnPct, hrRatioPct, cfg.thresholds.hrCostRatioPct, burnoutList.length, cfg.thresholds.burnoutWorkloadPct, lowStockCount, cfg.thresholds.lowStockRule]);
+    return insights.length ? insights : [{ tone: "good", text: "All systems stable." }];
+  }, [
+    revenue,
+    marginPct,
+    hrRatioPct,
+    burnoutList.length,
+    lowStockCount,
+    cfg.thresholds.marginWarnPct,
+    cfg.thresholds.hrCostRatioPct,
+    cfg.thresholds.burnoutWorkloadPct,
+    cfg.thresholds.lowStockRule,
+  ]);
 
   const toneClass = (tone: "good" | "warn" | "bad") => {
     if (tone === "good") return "rep-pill rep-good";
@@ -487,7 +537,11 @@ export default function ReportsPage() {
       { metric: "Avg Workload", value: avgWorkload },
       { metric: "Month Filter", value: cfg.filter.month },
     ];
-    await downloadText(`eventura_reports_${cfg.filter.month}_${today()}.csv`, toCSV(rows), "text/csv");
+    await downloadText(
+      `eventura_reports_${cfg.filter.month}_${today()}.csv`,
+      toCSV(rows),
+      "text/csv"
+    );
   };
 
   const exportJSON = async () => {
@@ -507,22 +561,31 @@ export default function ReportsPage() {
       },
       tables: {
         events: eventTable,
-        burnout: burnoutList.map((m) => ({ name: m.name || "Staff", workload: m.workload || 0, role: m.role || "" })),
+        burnout: burnoutList.map((m) => ({
+          name: m.name || "Staff",
+          workload: m.workload || 0,
+          role: m.role || "",
+        })),
       },
     };
     const text = JSON.stringify(payload, null, 2);
     setBackupText(text);
     try {
       await navigator.clipboard.writeText(text);
-      alert("Export JSON copied to clipboard (also shown in the box).");
+      alert("Export JSON copied to clipboard (also shown below).");
     } catch {
-      alert("Export generated (shown in the box). Copy manually.");
+      alert("Export generated (shown below). Copy manually.");
     }
   };
 
   const importJSON = () => {
     if (!backupText.trim()) return alert("Paste JSON first.");
-    if (!confirm("Import will replace Reports config (sections + thresholds + filter). Continue?")) return;
+    if (
+      !confirm(
+        "Import will replace Reports config (sections + thresholds + filter). Continue?"
+      )
+    )
+      return;
 
     try {
       const parsed = JSON.parse(backupText);
@@ -657,14 +720,24 @@ export default function ReportsPage() {
           <div className="rep-head">
             <div>
               <div className="rep-title">Reports & Analytics</div>
-              <div className="rep-sub">Advanced • Editable • Removable • AI Insights • Export</div>
+              <div className="rep-sub">
+                Advanced • Editable • Removable • AI Insights • Export
+              </div>
             </div>
 
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-              <Link href="/finance" className="eventura-button-secondary">Open Finance</Link>
-              <Link href="/events" className="eventura-button-secondary">Open Events</Link>
-              <Link href="/hr" className="eventura-button-secondary">Open HR</Link>
-              <Link href="/inventory" className="eventura-button-secondary">Open Inventory</Link>
+              <Link href="/finance" className="eventura-button-secondary">
+                Open Finance
+              </Link>
+              <Link href="/events" className="eventura-button-secondary">
+                Open Events
+              </Link>
+              <Link href="/hr" className="eventura-button-secondary">
+                Open HR
+              </Link>
+              <Link href="/inventory" className="eventura-button-secondary">
+                Open Inventory
+              </Link>
             </div>
           </div>
 
@@ -675,10 +748,14 @@ export default function ReportsPage() {
               className="eventura-search"
               style={{ maxWidth: 220 }}
               value={cfg.filter.month}
-              onChange={(e) => setCfg({ ...cfg, filter: { ...cfg.filter, month: e.target.value } })}
+              onChange={(e) =>
+                setCfg({ ...cfg, filter: { ...cfg.filter, month: e.target.value } })
+              }
             >
               {monthOptions.map((m) => (
-                <option key={m} value={m}>{m === "ALL" ? "ALL (Totals)" : m}</option>
+                <option key={m} value={m}>
+                  {m === "ALL" ? "ALL (Totals)" : m}
+                </option>
               ))}
             </select>
 
@@ -696,43 +773,43 @@ export default function ReportsPage() {
             </button>
           </div>
 
-          {/* EXECUTIVE KPIs (removable) */}
+          {/* EXECUTIVE KPIs */}
           {cfg.sections.executive && (
             <section className="rep-grid">
               <div className="rep-kpi">
                 <div className="rep-kpi-label">Revenue</div>
                 <div className="rep-kpi-value">{INR(revenue)}</div>
-                <div className="rep-kpi-note">Income + Confirmed/Completed event budgets</div>
+                <div className="rep-kpi-note">Income + event budgets</div>
               </div>
               <div className="rep-kpi">
                 <div className="rep-kpi-label">Net Profit</div>
                 <div className="rep-kpi-value">{INR(netProfit)}</div>
-                <div className="rep-kpi-note">Revenue − Expense − HR cost</div>
+                <div className="rep-kpi-note">Revenue − Expense − HR</div>
               </div>
               <div className="rep-kpi">
                 <div className="rep-kpi-label">HR Cost</div>
                 <div className="rep-kpi-value">{INR(hrCost)}</div>
-                <div className="rep-kpi-note">Core staff salary run (from HR)</div>
+                <div className="rep-kpi-note">Core salary run</div>
               </div>
               <div className="rep-kpi">
                 <div className="rep-kpi-label">Inventory Value</div>
                 <div className="rep-kpi-value">{INR(invValue)}</div>
-                <div className="rep-kpi-note">Qty × unit cost (from Inventory)</div>
+                <div className="rep-kpi-note">Qty × unit cost</div>
               </div>
               <div className="rep-kpi">
                 <div className="rep-kpi-label">Avg Workload</div>
                 <div className="rep-kpi-value">{avgWorkload}%</div>
-                <div className="rep-kpi-note">Core staff avg utilization</div>
+                <div className="rep-kpi-note">Core utilization</div>
               </div>
               <div className="rep-kpi">
                 <div className="rep-kpi-label">Low Stock Alerts</div>
                 <div className="rep-kpi-value">{lowStockCount}</div>
-                <div className="rep-kpi-note">Editable rule in Settings below</div>
+                <div className="rep-kpi-note">Editable rule below</div>
               </div>
             </section>
           )}
 
-          {/* Two-column panels */}
+          {/* PANELS */}
           <section className="rep-panels">
             {/* Trend */}
             {cfg.sections.trend && (
@@ -742,16 +819,17 @@ export default function ReportsPage() {
                   <button
                     className="rep-toggle"
                     type="button"
-                    onClick={() => setCfg({ ...cfg, sections: { ...cfg.sections, trend: false } })}
+                    onClick={() =>
+                      setCfg({ ...cfg, sections: { ...cfg.sections, trend: false } })
+                    }
                     title="Remove this section"
                   >
                     Remove
                   </button>
                 </div>
-
                 <canvas ref={chartRef} className="rep-canvas" />
                 <div className="rep-small" style={{ marginTop: 10 }}>
-                  Profit is approximate (includes HR as monthly run).
+                  Profit is approximate (uses HR monthly run).
                 </div>
               </div>
             )}
@@ -760,26 +838,27 @@ export default function ReportsPage() {
             <div className={"rep-panel " + (cfg.sections.ai ? "rep-ai" : "")}>
               <div className="rep-panel-title">
                 <h2>AI Insights + Settings</h2>
-                <div style={{ display: "flex", gap: 10 }}>
-                  {cfg.sections.ai ? (
-                    <button
-                      className="rep-toggle"
-                      type="button"
-                      onClick={() => setCfg({ ...cfg, sections: { ...cfg.sections, ai: false } })}
-                      title="Remove AI section"
-                    >
-                      Remove AI
-                    </button>
-                  ) : (
-                    <button
-                      className="rep-toggle"
-                      type="button"
-                      onClick={() => setCfg({ ...cfg, sections: { ...cfg.sections, ai: true } })}
-                    >
-                      Add AI
-                    </button>
-                  )}
-                </div>
+                {cfg.sections.ai ? (
+                  <button
+                    className="rep-toggle"
+                    type="button"
+                    onClick={() =>
+                      setCfg({ ...cfg, sections: { ...cfg.sections, ai: false } })
+                    }
+                  >
+                    Remove AI
+                  </button>
+                ) : (
+                  <button
+                    className="rep-toggle"
+                    type="button"
+                    onClick={() =>
+                      setCfg({ ...cfg, sections: { ...cfg.sections, ai: true } })
+                    }
+                  >
+                    Add AI
+                  </button>
+                )}
               </div>
 
               {cfg.sections.ai && (
@@ -795,7 +874,7 @@ export default function ReportsPage() {
 
               <div style={{ marginTop: 14 }}>
                 <div className="rep-small" style={{ marginBottom: 8 }}>
-                  Editable thresholds (changes update Insights live)
+                  Editable thresholds (updates insights live)
                 </div>
 
                 <div className="rep-formrow">
@@ -808,7 +887,10 @@ export default function ReportsPage() {
                     onChange={(e) =>
                       setCfg({
                         ...cfg,
-                        thresholds: { ...cfg.thresholds, burnoutWorkloadPct: clamp(Number(e.target.value), 0, 100) },
+                        thresholds: {
+                          ...cfg.thresholds,
+                          burnoutWorkloadPct: clamp(e.target.valueAsNumber, 0, 100),
+                        },
                       })
                     }
                   />
@@ -825,7 +907,10 @@ export default function ReportsPage() {
                     onChange={(e) =>
                       setCfg({
                         ...cfg,
-                        thresholds: { ...cfg.thresholds, hrCostRatioPct: clamp(Number(e.target.value), 0, 100) },
+                        thresholds: {
+                          ...cfg.thresholds,
+                          hrCostRatioPct: clamp(e.target.valueAsNumber, 0, 100),
+                        },
                       })
                     }
                   />
@@ -842,7 +927,10 @@ export default function ReportsPage() {
                     onChange={(e) =>
                       setCfg({
                         ...cfg,
-                        thresholds: { ...cfg.thresholds, marginWarnPct: clamp(Number(e.target.value), 0, 100) },
+                        thresholds: {
+                          ...cfg.thresholds,
+                          marginWarnPct: clamp(e.target.valueAsNumber, 0, 100),
+                        },
                       })
                     }
                   />
@@ -857,7 +945,10 @@ export default function ReportsPage() {
                     onChange={(e) =>
                       setCfg({
                         ...cfg,
-                        thresholds: { ...cfg.thresholds, lowStockRule: e.target.value as any },
+                        thresholds: {
+                          ...cfg.thresholds,
+                          lowStockRule: e.target.value as ReportsConfig["thresholds"]["lowStockRule"],
+                        },
                       })
                     }
                   >
@@ -865,15 +956,15 @@ export default function ReportsPage() {
                     <option value="LEQ_MIN_PLUS5">Qty ≤ MinQty + 5</option>
                   </select>
                 </div>
-              </div>
 
-              <div style={{ marginTop: 12 }} className="rep-small">
-                Ratios: HR {hrRatioPct.toFixed(1)}% • Margin {marginPct.toFixed(1)}%
+                <div style={{ marginTop: 12 }} className="rep-small">
+                  Ratios: HR {hrRatioPct.toFixed(1)}% • Margin {marginPct.toFixed(1)}%
+                </div>
               </div>
             </div>
           </section>
 
-          {/* HR SECTION (removable) */}
+          {/* HR */}
           {cfg.sections.hr && (
             <section className="rep-panel">
               <div className="rep-panel-title">
@@ -881,7 +972,9 @@ export default function ReportsPage() {
                 <button
                   className="rep-toggle"
                   type="button"
-                  onClick={() => setCfg({ ...cfg, sections: { ...cfg.sections, hr: false } })}
+                  onClick={() =>
+                    setCfg({ ...cfg, sections: { ...cfg.sections, hr: false } })
+                  }
                 >
                   Remove
                 </button>
@@ -909,7 +1002,9 @@ export default function ReportsPage() {
                       .map((m, idx) => (
                         <tr key={m.id ?? idx}>
                           <td>
-                            <div className="eventura-list-title">{m.name || `Core Staff #${idx + 1}`}</div>
+                            <div className="eventura-list-title">
+                              {m.name || `Core Staff #${idx + 1}`}
+                            </div>
                             <div className="eventura-list-sub">{m.role || ""}</div>
                           </td>
                           <td>{m.status}</td>
@@ -934,13 +1029,14 @@ export default function ReportsPage() {
 
               {burnoutList.length > 0 && (
                 <div style={{ marginTop: 10 }} className="rep-pill rep-warn">
-                  ⚠ Burnout list: {burnoutList.map((m) => m.name || "Staff").join(", ")}
+                  ⚠ Burnout:{" "}
+                  {burnoutList.map((m) => m.name || "Staff").join(", ")}
                 </div>
               )}
             </section>
           )}
 
-          {/* INVENTORY SECTION (removable) */}
+          {/* INVENTORY */}
           {cfg.sections.inventory && (
             <section className="rep-panel">
               <div className="rep-panel-title">
@@ -948,7 +1044,12 @@ export default function ReportsPage() {
                 <button
                   className="rep-toggle"
                   type="button"
-                  onClick={() => setCfg({ ...cfg, sections: { ...cfg.sections, inventory: false } })}
+                  onClick={() =>
+                    setCfg({
+                      ...cfg,
+                      sections: { ...cfg.sections, inventory: false },
+                    })
+                  }
                 >
                   Remove
                 </button>
@@ -978,7 +1079,9 @@ export default function ReportsPage() {
                         <tr key={i.id}>
                           <td>
                             <div className="eventura-list-title">{i.name}</div>
-                            <div className="eventura-list-sub">{i.category || ""} {i.sku ? `· ${i.sku}` : ""}</div>
+                            <div className="eventura-list-sub">
+                              {i.category || ""} {i.sku ? `· ${i.sku}` : ""}
+                            </div>
                           </td>
                           <td>{i.qtyOnHand}</td>
                           <td>{i.minQty}</td>
@@ -999,7 +1102,7 @@ export default function ReportsPage() {
             </section>
           )}
 
-          {/* EVENTS TABLE (removable) */}
+          {/* EVENTS */}
           {cfg.sections.events && (
             <section className="rep-panel">
               <div className="rep-panel-title">
@@ -1007,7 +1110,9 @@ export default function ReportsPage() {
                 <button
                   className="rep-toggle"
                   type="button"
-                  onClick={() => setCfg({ ...cfg, sections: { ...cfg.sections, events: false } })}
+                  onClick={() =>
+                    setCfg({ ...cfg, sections: { ...cfg.sections, events: false } })
+                  }
                 >
                   Remove
                 </button>
@@ -1047,7 +1152,7 @@ export default function ReportsPage() {
             </section>
           )}
 
-          {/* EXPORTS (removable) */}
+          {/* EXPORTS */}
           {cfg.sections.exports && (
             <section className="rep-panel">
               <div className="rep-panel-title">
@@ -1055,17 +1160,27 @@ export default function ReportsPage() {
                 <button
                   className="rep-toggle"
                   type="button"
-                  onClick={() => setCfg({ ...cfg, sections: { ...cfg.sections, exports: false } })}
+                  onClick={() =>
+                    setCfg({ ...cfg, sections: { ...cfg.sections, exports: false } })
+                  }
                 >
                   Remove
                 </button>
               </div>
 
               <div className="rep-formrow" style={{ marginBottom: 10 }}>
-                <button className="eventura-button-secondary" type="button" onClick={exportCSV}>
+                <button
+                  className="eventura-button-secondary"
+                  type="button"
+                  onClick={exportCSV}
+                >
                   Export CSV
                 </button>
-                <button className="eventura-button-secondary" type="button" onClick={exportJSON}>
+                <button
+                  className="eventura-button-secondary"
+                  type="button"
+                  onClick={exportJSON}
+                >
                   Export JSON
                 </button>
               </div>
@@ -1079,7 +1194,11 @@ export default function ReportsPage() {
               />
 
               <div className="rep-formrow" style={{ marginTop: 10 }}>
-                <button className="eventura-tag eventura-tag-amber" type="button" onClick={importJSON}>
+                <button
+                  className="eventura-tag eventura-tag-amber"
+                  type="button"
+                  onClick={importJSON}
+                >
                   Import Config JSON
                 </button>
                 <div className="rep-small">
@@ -1089,16 +1208,21 @@ export default function ReportsPage() {
             </section>
           )}
 
-          {/* “Add back removed sections” bar */}
+          {/* Add back removed sections */}
           <section className="rep-toolbar">
-            <div className="rep-small">Add back sections:</div>
+            <div className="rep-small">Toggle sections:</div>
 
             {Object.entries(cfg.sections).map(([k, v]) => (
               <button
                 key={k}
                 className={"eventura-tag " + (v ? "eventura-tag-green" : "eventura-tag-amber")}
                 type="button"
-                onClick={() => setCfg({ ...cfg, sections: { ...cfg.sections, [k]: !v } as any })}
+                onClick={() =>
+                  setCfg({
+                    ...cfg,
+                    sections: { ...cfg.sections, [k]: !v } as ReportsConfig["sections"],
+                  })
+                }
               >
                 {v ? `Hide ${k}` : `Show ${k}`}
               </button>
@@ -1137,7 +1261,9 @@ function SidebarCore({ user, active }: { user: User; active: string }) {
       </nav>
 
       <div className="eventura-sidebar-footer">
-        <div className="eventura-sidebar-role">Role: {user.role === "CEO" ? "CEO / Super Admin" : "Staff"}</div>
+        <div className="eventura-sidebar-role">
+          Role: {user.role === "CEO" ? "CEO / Super Admin" : "Staff"}
+        </div>
         <div className="eventura-sidebar-city">City: {user.city}</div>
       </div>
     </>
@@ -1154,7 +1280,9 @@ function TopbarCore({ user }: { user: User }) {
         <input className="eventura-search" placeholder="Search reports..." />
       </div>
       <div className="eventura-topbar-right">
-        <button className="eventura-topbar-icon" title="Notifications">🔔</button>
+        <button className="eventura-topbar-icon" title="Notifications">
+          🔔
+        </button>
         <div className="eventura-user-avatar" title={user.name}>
           {user.name.charAt(0).toUpperCase()}
         </div>
@@ -1164,7 +1292,8 @@ function TopbarCore({ user }: { user: User }) {
 }
 
 function SidebarLink(props: { href: string; label: string; icon: string; active?: boolean }) {
-  const className = "eventura-sidebar-link" + (props.active ? " eventura-sidebar-link-active" : "");
+  const className =
+    "eventura-sidebar-link" + (props.active ? " eventura-sidebar-link-active" : "");
   return (
     <Link href={props.href} className={className}>
       <span className="eventura-sidebar-icon">{props.icon}</span>
