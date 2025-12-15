@@ -232,17 +232,25 @@ export default function FinancePage() {
   const { ref: chartRef, w: chartW } = useCanvasResize();
 
   /* ===== AUTH ===== */
-  useEffect(() => {
-    const raw = localStorage.getItem(USER_KEY);
-    if (!raw) return (window.location.href = "/login");
-    try {
-      const u: User = JSON.parse(raw);
-      setUser(u);
-    } catch {
-      localStorage.removeItem(USER_KEY);
-      window.location.href = "/login";
-    }
-  }, []);
+/* ===== AUTH ===== */
+useEffect(() => {
+  if (typeof window === "undefined") return;
+
+  const raw = window.localStorage.getItem(USER_KEY);
+
+  if (!raw) {
+    window.location.href = "/login";
+    return; // ✅ return void (important)
+  }
+
+  try {
+    const u: User = JSON.parse(raw);
+    setUser(u);
+  } catch {
+    window.localStorage.removeItem(USER_KEY);
+    window.location.href = "/login";
+  }
+}, []);
 
   /* ===== LOAD ===== */
   useEffect(() => {
