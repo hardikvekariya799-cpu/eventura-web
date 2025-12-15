@@ -1,1240 +1,1276 @@
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+
+/* =========================================================
+   EVENTURA OS — FINANCE (Advanced + Smart + Indian GST Invoice)
+   File: app/finance/page.tsx
+   ✅ Vercel-safe (client only)
+   ✅ Works with localStorage
+   ✅ Indian GST Invoice: CGST/SGST vs IGST auto
+   ✅ Mark Invoice Paid → auto posts revenue + GST payable transactions
+========================================================= */
 
 /* ================= AUTH ================= */
 type Role = "CEO" | "Staff";
 type User = { name: string; role: Role; city: string };
+
 const USER_KEY = "eventura-user";
+const FIN_TX_KEY = "eventura-finance-transactions-v2";
+const FIN_INV_KEY = "eventura-finance-invoices-gst-v2";
 
-/* ================= STORAGE ================= */
-const DB_EVENTS = "eventura-events";
-const DB_FIN = "eventura-finance-transactions";
-const DB_HR = "eventura-hr-team";
-const DB_INV = "eventura-inventory-items";
-const DB_REPORTS_CFG = "eventura-reports-config";
-
-/* ================= TYPES ================= */
-type EventStatus = "Tentative" | "Confirmed" | "Completed" | "Cancelled" | string;
-
-type EventItem = {
-  id: number;
-  title: string;
-  status: EventStatus;
-  date: string; // YYYY-MM-DD
-  budget?: number;
-  city?: string;
+/* ================= GST PROFILE ================= */
+type GSTProfile = {
+  legalName: string;
+  gstin: string;
+  state: string;
+  stateCode: string;
+  address: string;
+  bankName: string;
+  accountNo: string;
+  ifsc: string;
+  pan: string;
 };
 
+const COMPANY_GST: GSTProfile = {
+  legalName: "Eventura Events & Weddings LLP",
+  gstin: "24ABCDE1234F1Z5",
+  state: "Gujarat",
+  stateCode: "24",
+  address: "Surat, Gujarat, India",
+  bankName: "HDFC Bank",
+  accountNo: "XXXXXXXX1234",
+  ifsc: "HDFC0001234",
+  pan: "ABCDE1234F",
+};
+
+/* ================= FINANCE TYPES ================= */
 type TxType = "Income" | "Expense";
+type TxStatus = "Cleared" | "Pending";
+
 type FinanceTx = {
   id: number;
-  type: TxType;
   date: string; // YYYY-MM-DD
-  category?: string;
-  amount: number;
-  note?: string;
-  eventId?: number;
+  type: TxType;
+  status: TxStatus;
+  category: string;
+  description: string;
+  amount: number; // numeric
+  fromAccount: string; // e.g., Bank/Cash/Receivable
+  toAccount: string; // e.g., Revenue/Payable/Vendor
+  createdBy: string;
+  relatedInvoiceId?: number;
 };
 
-type TeamMember = {
-  id: number;
-  name?: string;
-  role?: string;
-  status: "Core" | "Freelancer" | "Trainee" | string;
-  workload?: number; // 0-100
-  monthlySalary?: number;
-  eventsThisMonth?: number;
-  rating?: number;
-  skills?: string[];
-};
+type InvoiceStatus = "Draft" | "Sent" | "Paid" | "Cancelled";
+type GSTType = "CGST_SGST" | "IGST";
 
-type InventoryItem = {
+type InvoiceItem = {
   id: number;
   name: string;
-  category?: string;
-  assetType?: string;
-  status?: string;
-  location?: string;
-  qtyOnHand: number;
-  minQty: number;
-  unitCost: number;
-  sku?: string;
-  vendorName?: string;
+  qty: number;
+  rate: number;
 };
 
-type ReportsConfig = {
-  sections: {
-    executive: boolean;
-    trend: boolean;
-    ai: boolean;
-    hr: boolean;
-    inventory: boolean;
-    events: boolean;
-    exports: boolean;
-  };
-  thresholds: {
-    burnoutWorkloadPct: number; // 0..100
-    hrCostRatioPct: number; // 0..100
-    lowStockRule: "LEQ_MIN" | "LEQ_MIN_PLUS5";
-    marginWarnPct: number; // 0..100
-  };
-  filter: {
-    month: string; // "ALL" or YYYY-MM
-  };
+type Invoice = {
+  id: number;
+  invoiceNo: string;
+  date: string; // YYYY-MM-DD
+  dueDate: string; // YYYY-MM-DD
+  clientName: string;
+  clientGSTIN?: string;
+  eventName?: string;
+  city?: string;
+  status: InvoiceStatus;
+  items: InvoiceItem[];
+  notes: string;
+  createdBy: string;
+  paidDate?: string;
+
+  // GST
+  placeOfSupply: string; // e.g. Gujarat / Maharashtra
+  hsn: string; // SAC/HSN
+  gstRate: number; // 18
+  gstType: GSTType;
 };
 
-/* ================= UTILS ================= */
-const INR = (v: number) => "₹" + Math.round(v || 0).toLocaleString("en-IN");
-const ym = (d: string) => (d || "").slice(0, 7);
-const today = () => new Date().toISOString().slice(0, 10);
+/* ================= HELPERS ================= */
+function todayISO() {
+  return new Date().toISOString().slice(0, 10);
+}
 
-function safeArray<T>(key: string): T[] {
-  try {
-    const raw = localStorage.getItem(key);
-    if (!raw) return [];
-    const data = JSON.parse(raw);
-    return Array.isArray(data) ? data : [];
-  } catch {
-    return [];
+function addDaysISO(baseISO: string, days: number) {
+  const d = new Date(baseISO);
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+function fmtINR(n: number) {
+  return n.toLocaleString("en-IN", { maximumFractionDigits: 0 });
+}
+
+function safeNum(v: any, fallback = 0): number {
+  const n = typeof v === "number" ? v : parseFloat(String(v ?? ""));
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function invSubTotal(inv: Invoice): number {
+  return (inv.items ?? []).reduce((sum, it) => sum + (it.qty || 0) * (it.rate || 0), 0);
+}
+
+function calcGST(taxable: number, rate: number, type: GSTType) {
+  const gst = (taxable * rate) / 100;
+  if (type === "IGST") {
+    return { taxable, igst: gst, cgst: 0, sgst: 0, total: taxable + gst };
   }
+  return { taxable, igst: 0, cgst: gst / 2, sgst: gst / 2, total: taxable + gst };
 }
 
-function safeObj<T>(key: string, fallback: T): T {
-  try {
-    const raw = localStorage.getItem(key);
-    if (!raw) return fallback;
-    const parsed = JSON.parse(raw);
-    return { ...fallback, ...parsed };
-  } catch {
-    return fallback;
-  }
+function detectGSTType(placeOfSupply: string) {
+  const pos = (placeOfSupply || "").trim().toLowerCase();
+  const sameState = pos === "gujarat" || pos.includes("gujarat");
+  return sameState ? ("CGST_SGST" as const) : ("IGST" as const);
 }
 
-function clamp(n: number, min: number, max: number) {
-  const x = Number(n);
-  if (Number.isNaN(x)) return min;
-  return Math.max(min, Math.min(max, x));
+function nextInvoiceNo(existing: Invoice[]) {
+  // EV-YYYY-0001
+  const year = new Date().getFullYear();
+  const prefix = `EV-${year}-`;
+  const nums = existing
+    .map((i) => i.invoiceNo)
+    .filter((no) => no.startsWith(prefix))
+    .map((no) => parseInt(no.replace(prefix, ""), 10))
+    .filter((n) => Number.isFinite(n));
+  const next = (nums.length ? Math.max(...nums) : 0) + 1;
+  return `${prefix}${String(next).padStart(4, "0")}`;
 }
 
-function toCSV(rows: Record<string, any>[]) {
-  if (!rows.length) return "";
-  const cols = Array.from(new Set(rows.flatMap((r) => Object.keys(r))));
-  const esc = (v: any) => {
-    const s = String(v ?? "");
-    if (s.includes('"') || s.includes(",") || s.includes("\n"))
-      return `"${s.replaceAll('"', '""')}"`;
-    return s;
-  };
-  const head = cols.map(esc).join(",");
-  const body = rows
-    .map((r) => cols.map((c) => esc(r[c])).join(","))
-    .join("\n");
-  return head + "\n" + body;
-}
-
-async function downloadText(
-  filename: string,
-  content: string,
-  mime = "text/plain"
-) {
-  const blob = new Blob([content], { type: mime });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
-/* ================= SIMPLE CANVAS CHART ================= */
-function useCanvasSize() {
-  const ref = useRef<HTMLCanvasElement | null>(null);
-  const [w, setW] = useState(680);
-
-  useEffect(() => {
-    const resize = () => {
-      if (!ref.current) return;
-      const p = ref.current.parentElement;
-      if (!p) return;
-      setW(Math.max(320, Math.floor(p.getBoundingClientRect().width)));
-    };
-    resize();
-    window.addEventListener("resize", resize);
-    return () => window.removeEventListener("resize", resize);
-  }, []);
-
-  return { ref, w };
-}
-
-function drawLines(
-  canvas: HTMLCanvasElement,
-  labels: string[],
-  series: { name: string; values: number[] }[]
-) {
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return;
-
-  const W = canvas.width;
-  const H = canvas.height;
-
-  ctx.clearRect(0, 0, W, H);
-  ctx.fillStyle = "rgba(255,255,255,0.03)";
-  ctx.fillRect(0, 0, W, H);
-
-  const padL = 54,
-    padR = 16,
-    padT = 14,
-    padB = 30;
-  const cw = W - padL - padR;
-  const ch = H - padT - padB;
-
-  const maxV = Math.max(
-    1,
-    ...series.flatMap((s) => s.values.map((v) => v || 0))
-  );
-
-  ctx.strokeStyle = "rgba(255,255,255,0.10)";
-  ctx.lineWidth = 1;
-  ctx.font = "12px system-ui";
-
-  for (let i = 0; i <= 4; i++) {
-    const y = padT + (ch * i) / 4;
-    ctx.beginPath();
-    ctx.moveTo(padL, y);
-    ctx.lineTo(padL + cw, y);
-    ctx.stroke();
-
-    const tick = Math.round(maxV * (1 - i / 4));
-    ctx.fillStyle = "rgba(255,255,255,0.65)";
-    ctx.fillText((tick / 1000).toFixed(0) + "k", 10, y + 4);
-  }
-
-  ctx.fillStyle = "rgba(255,255,255,0.65)";
-  for (let i = 0; i < labels.length; i++) {
-    if (labels.length <= 1) break;
-    const x = padL + (cw * i) / (labels.length - 1);
-    if (i === 0 || i === labels.length - 1 || i % 2 === 1) {
-      ctx.fillText(labels[i].slice(5), x - 12, padT + ch + 18);
-    }
-  }
-
-  const alphas = [1, 0.7, 0.45];
-  series.forEach((s, idx) => {
-    ctx.strokeStyle = `rgba(255,255,255,${alphas[idx % alphas.length]})`;
-    ctx.lineWidth = 2;
-
-    ctx.beginPath();
-    s.values.forEach((v, i) => {
-      const x =
-        labels.length <= 1 ? padL : padL + (cw * i) / (labels.length - 1);
-      const y = padT + ch - (ch * (v || 0)) / maxV;
-      if (i === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    });
-    ctx.stroke();
-  });
-
-  ctx.fillStyle = "rgba(255,255,255,0.82)";
-  let lx = padL;
-  const ly = 13;
-  series.forEach((s) => {
-    ctx.fillText(s.name, lx, ly);
-    lx += ctx.measureText(s.name).width + 16;
-  });
+function amountInWordsSimpleINR(total: number) {
+  // Keep it simple & safe (no huge word lib)
+  return `Rupees ${fmtINR(Math.round(total))} only`;
 }
 
 /* ================= PAGE ================= */
-export default function ReportsPage() {
+export default function FinancePage() {
   const [user, setUser] = useState<User | null>(null);
-
-  const [events, setEvents] = useState<EventItem[]>([]);
   const [tx, setTx] = useState<FinanceTx[]>([]);
-  const [team, setTeam] = useState<TeamMember[]>([]);
-  const [inv, setInv] = useState<InventoryItem[]>([]);
+  const [invoices, setInvoices] = useState<Invoice[]>([]);
+  const [view, setView] = useState<"dashboard" | "transactions" | "invoices">("dashboard");
 
-  const defaultCfg: ReportsConfig = {
-    sections: {
-      executive: true,
-      trend: true,
-      ai: true,
-      hr: true,
-      inventory: true,
-      events: true,
-      exports: true,
-    },
-    thresholds: {
-      burnoutWorkloadPct: 85,
-      hrCostRatioPct: 35,
-      lowStockRule: "LEQ_MIN",
-      marginWarnPct: 20,
-    },
-    filter: { month: "ALL" },
-  };
+  // filters
+  const [monthFilter, setMonthFilter] = useState<string>(() => todayISO().slice(0, 7)); // YYYY-MM
+  const [search, setSearch] = useState("");
 
-  const [cfg, setCfg] = useState<ReportsConfig>(defaultCfg);
-  const [backupText, setBackupText] = useState("");
+  // transaction form
+  const [txDraft, setTxDraft] = useState<Omit<FinanceTx, "id" | "createdBy">>({
+    date: todayISO(),
+    type: "Expense",
+    status: "Cleared",
+    category: "General",
+    description: "",
+    amount: 0,
+    fromAccount: "Bank",
+    toAccount: "Vendor",
+  });
 
-  const { ref: chartRef, w: chartW } = useCanvasSize();
+  // invoice form
+  const [invDraft, setInvDraft] = useState<Omit<Invoice, "id" | "invoiceNo" | "createdBy">>({
+    date: todayISO(),
+    dueDate: addDaysISO(todayISO(), 7),
+    clientName: "",
+    clientGSTIN: "",
+    eventName: "",
+    city: "",
+    status: "Draft",
+    items: [{ id: 1, name: "Event Planning & Management", qty: 1, rate: 100000 }],
+    notes: "",
 
-  // Auth
+    placeOfSupply: "Gujarat",
+    hsn: "9983",
+    gstRate: 18,
+    gstType: "CGST_SGST",
+  });
+
+  // auth
   useEffect(() => {
-    const raw = localStorage.getItem(USER_KEY);
-    if (!raw) return (window.location.href = "/login");
+    if (typeof window === "undefined") return;
+    const raw = window.localStorage.getItem(USER_KEY);
+    if (!raw) {
+      window.location.href = "/login";
+      return;
+    }
     try {
       const u: User = JSON.parse(raw);
-      if (u.role !== "CEO") return (window.location.href = "/");
       setUser(u);
     } catch {
-      localStorage.removeItem(USER_KEY);
+      window.localStorage.removeItem(USER_KEY);
       window.location.href = "/login";
     }
   }, []);
 
-  // Load
+  // load
   useEffect(() => {
-    setEvents(safeArray<EventItem>(DB_EVENTS));
-    setTx(safeArray<FinanceTx>(DB_FIN));
-    setTeam(safeArray<TeamMember>(DB_HR));
-    setInv(safeArray<InventoryItem>(DB_INV));
-    setCfg(safeObj<ReportsConfig>(DB_REPORTS_CFG, defaultCfg));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    if (typeof window === "undefined") return;
+
+    // tx
+    const rawTx = window.localStorage.getItem(FIN_TX_KEY);
+    if (rawTx) {
+      try {
+        const parsed = JSON.parse(rawTx) as FinanceTx[];
+        setTx(Array.isArray(parsed) ? parsed : []);
+      } catch {
+        setTx([]);
+      }
+    } else {
+      // seed
+      const seed: FinanceTx[] = [
+        {
+          id: Date.now(),
+          date: todayISO(),
+          type: "Income",
+          status: "Cleared",
+          category: "Revenue",
+          description: "Advance received - Patel Wedding",
+          amount: 250000,
+          fromAccount: "Bank",
+          toAccount: "Revenue",
+          createdBy: "System",
+        },
+        {
+          id: Date.now() + 1,
+          date: todayISO(),
+          type: "Expense",
+          status: "Cleared",
+          category: "Marketing",
+          description: "Instagram Ads",
+          amount: 12000,
+          fromAccount: "Bank",
+          toAccount: "Marketing",
+          createdBy: "System",
+        },
+      ];
+      setTx(seed);
+      window.localStorage.setItem(FIN_TX_KEY, JSON.stringify(seed));
+    }
+
+    // invoices
+    const rawInv = window.localStorage.getItem(FIN_INV_KEY);
+    if (rawInv) {
+      try {
+        const parsed = JSON.parse(rawInv) as Invoice[];
+        setInvoices(Array.isArray(parsed) ? parsed : []);
+      } catch {
+        setInvoices([]);
+      }
+    } else {
+      setInvoices([]);
+      window.localStorage.setItem(FIN_INV_KEY, JSON.stringify([]));
+    }
   }, []);
 
-  // Persist (fixes "comes back")
+  // persist
   useEffect(() => {
-    localStorage.setItem(DB_REPORTS_CFG, JSON.stringify(cfg));
-  }, [cfg]);
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(FIN_TX_KEY, JSON.stringify(tx));
+  }, [tx]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(FIN_INV_KEY, JSON.stringify(invoices));
+  }, [invoices]);
+
+  const monthTx = useMemo(() => {
+    const m = monthFilter;
+    return tx.filter((t) => (t.date || "").startsWith(m));
+  }, [tx, monthFilter]);
+
+  const kpis = useMemo(() => {
+    const income = monthTx.filter((t) => t.type === "Income").reduce((s, t) => s + t.amount, 0);
+    const expense = monthTx.filter((t) => t.type === "Expense").reduce((s, t) => s + t.amount, 0);
+
+    const profit = income - expense;
+
+    // GST Payable estimate from posted tax transactions (category Tax)
+    const gstPayable = monthTx
+      .filter((t) => t.category === "Tax" && t.type === "Expense")
+      .reduce((s, t) => s + t.amount, 0);
+
+    // receivables: Sent invoices not paid
+    const receivable = invoices
+      .filter((i) => i.status === "Sent" || i.status === "Draft")
+      .reduce((s, i) => s + calcGST(invSubTotal(i), i.gstRate, i.gstType).total, 0);
+
+    // cash snapshot (super simple): cleared income - cleared expense
+    const clearedIncome = monthTx.filter((t) => t.type === "Income" && t.status === "Cleared").reduce((s, t) => s + t.amount, 0);
+    const clearedExpense = monthTx.filter((t) => t.type === "Expense" && t.status === "Cleared").reduce((s, t) => s + t.amount, 0);
+    const cashNet = clearedIncome - clearedExpense;
+
+    return { income, expense, profit, gstPayable, receivable, cashNet };
+  }, [monthTx, invoices]);
 
   if (!user) return null;
+  const isCEO = user.role === "CEO";
 
-  /* ================= FILTERS ================= */
-  const monthOptions = useMemo(() => {
-    const months = new Set<string>();
-    tx.forEach((t) => months.add(ym(t.date)));
-    events.forEach((e) => months.add(ym(e.date)));
-    return ["ALL", ...Array.from(months).filter(Boolean).sort()];
-  }, [tx, events]);
-
-  const filteredTx = useMemo(() => {
-    if (cfg.filter.month === "ALL") return tx;
-    return tx.filter((t) => ym(t.date) === cfg.filter.month);
-  }, [tx, cfg.filter.month]);
-
-  const filteredEvents = useMemo(() => {
-    if (cfg.filter.month === "ALL") return events;
-    return events.filter((e) => ym(e.date) === cfg.filter.month);
-  }, [events, cfg.filter.month]);
-
-  /* ================= CALC ================= */
-  const autoEventRevenue = useMemo(() => {
-    return filteredEvents
-      .filter((e) => e.status === "Confirmed" || e.status === "Completed")
-      .reduce((s, e) => s + (e.budget || 0), 0);
-  }, [filteredEvents]);
-
-  const income = useMemo(() => {
-    return filteredTx
-      .filter((t) => t.type === "Income")
-      .reduce((s, t) => s + (t.amount || 0), 0);
-  }, [filteredTx]);
-
-  const expense = useMemo(() => {
-    return filteredTx
-      .filter((t) => t.type === "Expense")
-      .reduce((s, t) => s + (t.amount || 0), 0);
-  }, [filteredTx]);
-
-  const revenue = income + autoEventRevenue;
-
-  const hrCost = useMemo(() => {
-    const core = team.filter((m) => m.status === "Core");
-    return core.reduce((s, m) => s + (m.monthlySalary || 0), 0);
-  }, [team]);
-
-  const netProfit = revenue - expense - hrCost;
-
-  const hrRatioPct = revenue > 0 ? (hrCost / revenue) * 100 : 0;
-  const marginPct = revenue > 0 ? (netProfit / revenue) * 100 : 0;
-
-  const invValue = useMemo(() => {
-    return inv.reduce(
-      (s, i) => s + (i.unitCost || 0) * Math.max(0, i.qtyOnHand || 0),
-      0
-    );
-  }, [inv]);
-
-  const lowStockCount = useMemo(() => {
-    const rule = cfg.thresholds.lowStockRule;
-    return inv.filter((i) => {
-      const min = i.minQty || 0;
-      const threshold = rule === "LEQ_MIN_PLUS5" ? min + 5 : min;
-      return (i.qtyOnHand || 0) <= threshold;
-    }).length;
-  }, [inv, cfg.thresholds.lowStockRule]);
-
-  const avgWorkload = useMemo(() => {
-    const core = team.filter((m) => m.status === "Core");
-    if (!core.length) return 0;
-    const sum = core.reduce((s, m) => s + (m.workload || 0), 0);
-    return Math.round(sum / core.length);
-  }, [team]);
-
-  const burnoutList = useMemo(() => {
-    const th = cfg.thresholds.burnoutWorkloadPct;
-    return team
-      .filter((m) => m.status === "Core")
-      .filter((m) => (m.workload || 0) >= th)
-      .sort((a, b) => (b.workload || 0) - (a.workload || 0));
-  }, [team, cfg.thresholds.burnoutWorkloadPct]);
-
-  const eventTable = useMemo(() => {
-    return filteredEvents
-      .slice()
-      .sort((a, b) => a.date.localeCompare(b.date))
-      .map((e) => ({
-        id: e.id,
-        date: e.date,
-        title: e.title,
-        status: e.status,
-        budget: e.budget || 0,
-      }));
-  }, [filteredEvents]);
-
-  /* ================= MONTHLY SERIES (CHART) ================= */
-  const monthlySeries = useMemo(() => {
-    const map = new Map<string, { rev: number; exp: number; ev: number }>();
-
-    tx.forEach((t) => {
-      const m = ym(t.date);
-      if (!m) return;
-      if (!map.has(m)) map.set(m, { rev: 0, exp: 0, ev: 0 });
-      const row = map.get(m)!;
-      if (t.type === "Income") row.rev += t.amount || 0;
-      else row.exp += t.amount || 0;
-    });
-
-    events.forEach((e) => {
-      if (e.status !== "Confirmed" && e.status !== "Completed") return;
-      const m = ym(e.date);
-      if (!m) return;
-      if (!map.has(m)) map.set(m, { rev: 0, exp: 0, ev: 0 });
-      map.get(m)!.ev += e.budget || 0;
-    });
-
-    const months = Array.from(map.keys()).sort();
-    const revenueByMonth = months.map(
-      (m) => (map.get(m)!.rev || 0) + (map.get(m)!.ev || 0)
-    );
-    const expenseByMonth = months.map((m) => map.get(m)!.exp || 0);
-    const profitByMonth = months.map(
-      (_, i) => revenueByMonth[i] - expenseByMonth[i] - hrCost
-    );
-
-    return { months, revenueByMonth, expenseByMonth, profitByMonth };
-  }, [tx, events, hrCost]);
-
-  useEffect(() => {
-    if (!chartRef.current) return;
-    chartRef.current.width = chartW;
-    chartRef.current.height = 220;
-    drawLines(chartRef.current, monthlySeries.months, [
-      { name: "Revenue", values: monthlySeries.revenueByMonth },
-      { name: "Expense", values: monthlySeries.expenseByMonth },
-      { name: "Profit (approx)", values: monthlySeries.profitByMonth },
-    ]);
-  }, [chartRef, chartW, monthlySeries]);
-
-  /* ================= AI INSIGHTS ================= */
-  const aiInsights = useMemo(() => {
-    const insights: { tone: "good" | "warn" | "bad"; text: string }[] = [];
-
-    if (revenue === 0)
-      insights.push({
-        tone: "warn",
-        text: "No revenue detected. Add event budgets (Confirmed/Completed) or add Income transactions.",
-      });
-
-    if (marginPct < 0)
-      insights.push({
-        tone: "bad",
-        text: `You are running at a LOSS. Margin ${marginPct.toFixed(
-          1
-        )}%. Reduce expenses or raise pricing.`,
-      });
-    else if (marginPct < cfg.thresholds.marginWarnPct)
-      insights.push({
-        tone: "warn",
-        text: `Margin is low (${marginPct.toFixed(
-          1
-        )}%). Target ≥ ${cfg.thresholds.marginWarnPct}%.`,
-      });
-    else
-      insights.push({
-        tone: "good",
-        text: `Margin healthy at ${marginPct.toFixed(
-          1
-        )}%. Keep premium pricing discipline.`,
-      });
-
-    if (hrRatioPct > cfg.thresholds.hrCostRatioPct) {
-      insights.push({
-        tone: "warn",
-        text: `HR cost ratio ${hrRatioPct.toFixed(
-          1
-        )}% exceeds ${cfg.thresholds.hrCostRatioPct}%. Use freelancers during peaks or grow revenue.`,
-      });
+  // --- actions: transactions ---
+  function addTx(e: React.FormEvent) {
+    e.preventDefault();
+    if (!txDraft.date || !txDraft.description || !txDraft.category) {
+      alert("Date, category and description are required.");
+      return;
     }
+    const amount = safeNum(txDraft.amount, 0);
+    if (amount <= 0) {
+      alert("Amount must be greater than 0.");
+      return;
+    }
+    const newTx: FinanceTx = {
+      id: Date.now(),
+      ...txDraft,
+      amount,
+      createdBy: user.name,
+    };
+    setTx((p) => [newTx, ...p]);
+    setTxDraft({
+      date: todayISO(),
+      type: "Expense",
+      status: "Cleared",
+      category: "General",
+      description: "",
+      amount: 0,
+      fromAccount: "Bank",
+      toAccount: "Vendor",
+    });
+  }
 
-    if (burnoutList.length) {
-      insights.push({
-        tone: "warn",
-        text: `Burnout risk: ${burnoutList.length} core staff above ${cfg.thresholds.burnoutWorkloadPct}% workload.`,
+  function deleteTx(id: number) {
+    if (!confirm("Delete this transaction?")) return;
+    setTx((p) => p.filter((t) => t.id !== id));
+  }
+
+  // --- actions: invoices ---
+  function createInvoice(e: React.FormEvent) {
+    e.preventDefault();
+    if (!invDraft.clientName.trim()) {
+      alert("Client name is required.");
+      return;
+    }
+    if (!invDraft.date) {
+      alert("Invoice date is required.");
+      return;
+    }
+    if (!invDraft.items?.length) {
+      alert("Add at least 1 item.");
+      return;
+    }
+    const cleanedItems = invDraft.items
+      .filter((it) => it.name.trim())
+      .map((it, idx) => ({
+        id: it.id || idx + 1,
+        name: it.name,
+        qty: Math.max(1, safeNum(it.qty, 1)),
+        rate: Math.max(0, safeNum(it.rate, 0)),
+      }));
+
+    const inv: Invoice = {
+      id: Date.now(),
+      invoiceNo: nextInvoiceNo(invoices),
+      ...invDraft,
+      clientGSTIN: (invDraft.clientGSTIN || "").trim() || undefined,
+      items: cleanedItems,
+      createdBy: user.name,
+      gstType: detectGSTType(invDraft.placeOfSupply),
+    };
+
+    setInvoices((p) => [inv, ...p]);
+
+    // reset
+    setInvDraft({
+      date: todayISO(),
+      dueDate: addDaysISO(todayISO(), 7),
+      clientName: "",
+      clientGSTIN: "",
+      eventName: "",
+      city: "",
+      status: "Draft",
+      items: [{ id: 1, name: "Event Planning & Management", qty: 1, rate: 100000 }],
+      notes: "",
+      placeOfSupply: "Gujarat",
+      hsn: "9983",
+      gstRate: 18,
+      gstType: "CGST_SGST",
+    });
+
+    setView("invoices");
+  }
+
+  function setInvoiceStatus(id: number, status: InvoiceStatus) {
+    setInvoices((p) => p.map((i) => (i.id === id ? { ...i, status } : i)));
+  }
+
+  function deleteInvoice(id: number) {
+    if (!confirm("Delete this invoice?")) return;
+    setInvoices((p) => p.filter((i) => i.id !== id));
+  }
+
+  function markInvoicePaid(id: number) {
+    const inv = invoices.find((i) => i.id === id);
+    if (!inv) return;
+
+    const paidDate = todayISO();
+    const sub = invSubTotal(inv);
+    const gst = calcGST(sub, inv.gstRate, inv.gstType);
+
+    // Revenue tx = TOTAL (taxable + GST)
+    const revenueTx: FinanceTx = {
+      id: Date.now(),
+      date: paidDate,
+      type: "Income",
+      status: "Cleared",
+      category: "Revenue",
+      description: `Invoice paid: ${inv.invoiceNo} - ${inv.clientName}`,
+      amount: gst.total,
+      fromAccount: "Bank",
+      toAccount: "Revenue",
+      createdBy: user.name,
+      relatedInvoiceId: inv.id,
+    };
+
+    // GST Payable postings (kept as Expense/Tax → Payable bucket, so you track liability)
+    const taxTx: FinanceTx[] = [];
+    if (inv.gstType === "IGST") {
+      taxTx.push({
+        id: Date.now() + 11,
+        date: paidDate,
+        type: "Expense",
+        status: "Cleared",
+        category: "Tax",
+        description: `IGST payable (${inv.gstRate}%) – ${inv.invoiceNo}`,
+        amount: gst.igst,
+        fromAccount: "Bank",
+        toAccount: "GST Payable",
+        createdBy: user.name,
+        relatedInvoiceId: inv.id,
       });
     } else {
-      insights.push({
-        tone: "good",
-        text: "No burnout alerts based on current workload threshold.",
-      });
+      taxTx.push(
+        {
+          id: Date.now() + 12,
+          date: paidDate,
+          type: "Expense",
+          status: "Cleared",
+          category: "Tax",
+          description: `CGST payable (${inv.gstRate / 2}%) – ${inv.invoiceNo}`,
+          amount: gst.cgst,
+          fromAccount: "Bank",
+          toAccount: "GST Payable",
+          createdBy: user.name,
+          relatedInvoiceId: inv.id,
+        },
+        {
+          id: Date.now() + 13,
+          date: paidDate,
+          type: "Expense",
+          status: "Cleared",
+          category: "Tax",
+          description: `SGST payable (${inv.gstRate / 2}%) – ${inv.invoiceNo}`,
+          amount: gst.sgst,
+          fromAccount: "Bank",
+          toAccount: "GST Payable",
+          createdBy: user.name,
+          relatedInvoiceId: inv.id,
+        }
+      );
     }
 
-    if (lowStockCount > 0) {
-      insights.push({
-        tone: "warn",
-        text: `Inventory alert: ${lowStockCount} item(s) low stock (rule: ${cfg.thresholds.lowStockRule}). Reorder before peak events.`,
-      });
-    }
-
-    return insights.length ? insights : [{ tone: "good", text: "All systems stable." }];
-  }, [
-    revenue,
-    marginPct,
-    hrRatioPct,
-    burnoutList.length,
-    lowStockCount,
-    cfg.thresholds.marginWarnPct,
-    cfg.thresholds.hrCostRatioPct,
-    cfg.thresholds.burnoutWorkloadPct,
-    cfg.thresholds.lowStockRule,
-  ]);
-
-  const toneClass = (tone: "good" | "warn" | "bad") => {
-    if (tone === "good") return "rep-pill rep-good";
-    if (tone === "warn") return "rep-pill rep-warn";
-    return "rep-pill rep-bad";
-  };
-
-  /* ================= EXPORTS ================= */
-  const exportCSV = async () => {
-    const rows = [
-      { metric: "Revenue", value: revenue },
-      { metric: "Net Profit", value: netProfit },
-      { metric: "HR Cost", value: hrCost },
-      { metric: "Expense", value: expense },
-      { metric: "Inventory Value", value: invValue },
-      { metric: "Low Stock Count", value: lowStockCount },
-      { metric: "Avg Workload", value: avgWorkload },
-      { metric: "Month Filter", value: cfg.filter.month },
-    ];
-    await downloadText(
-      `eventura_reports_${cfg.filter.month}_${today()}.csv`,
-      toCSV(rows),
-      "text/csv"
+    setTx((p) => [revenueTx, ...taxTx, ...p]);
+    setInvoices((p) =>
+      p.map((i) => (i.id === id ? { ...i, status: "Paid", paidDate } : i))
     );
-  };
+  }
 
-  const exportJSON = async () => {
-    const payload = {
-      version: 1,
-      exportedAt: new Date().toISOString(),
-      config: cfg,
-      snapshot: {
-        revenue,
-        expense,
-        hrCost,
-        netProfit,
-        invValue,
-        lowStockCount,
-        avgWorkload,
-        eventCount: filteredEvents.length,
-      },
-      tables: {
-        events: eventTable,
-        burnout: burnoutList.map((m) => ({
-          name: m.name || "Staff",
-          workload: m.workload || 0,
-          role: m.role || "",
-        })),
-      },
-    };
-    const text = JSON.stringify(payload, null, 2);
-    setBackupText(text);
-    try {
-      await navigator.clipboard.writeText(text);
-      alert("Export JSON copied to clipboard (also shown below).");
-    } catch {
-      alert("Export generated (shown below). Copy manually.");
-    }
-  };
+  // filtered tables
+  const txFiltered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const list = monthTx.slice().sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+    if (!q) return list;
+    return list.filter((t) => {
+      return (
+        (t.description || "").toLowerCase().includes(q) ||
+        (t.category || "").toLowerCase().includes(q) ||
+        (t.type || "").toLowerCase().includes(q) ||
+        (t.fromAccount || "").toLowerCase().includes(q) ||
+        (t.toAccount || "").toLowerCase().includes(q)
+      );
+    });
+  }, [monthTx, search]);
 
-  const importJSON = () => {
-    if (!backupText.trim()) return alert("Paste JSON first.");
-    if (
-      !confirm(
-        "Import will replace Reports config (sections + thresholds + filter). Continue?"
-      )
-    )
-      return;
+  const invFiltered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const list = invoices.slice().sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+    if (!q) return list;
+    return list.filter((i) => {
+      const total = calcGST(invSubTotal(i), i.gstRate, i.gstType).total;
+      return (
+        (i.invoiceNo || "").toLowerCase().includes(q) ||
+        (i.clientName || "").toLowerCase().includes(q) ||
+        (i.eventName || "").toLowerCase().includes(q) ||
+        (i.city || "").toLowerCase().includes(q) ||
+        String(total).includes(q)
+      );
+    });
+  }, [invoices, search]);
 
-    try {
-      const parsed = JSON.parse(backupText);
-      if (parsed?.config) setCfg({ ...defaultCfg, ...parsed.config });
-      alert("Imported config successfully.");
-    } catch {
-      alert("Invalid JSON.");
-    }
-  };
+  const invPreviewTotals = useMemo(() => {
+    const sub = invDraft.items.reduce((s, it) => s + safeNum(it.qty, 1) * safeNum(it.rate, 0), 0);
+    const gstType = detectGSTType(invDraft.placeOfSupply);
+    return calcGST(sub, safeNum(invDraft.gstRate, 18), gstType);
+  }, [invDraft.items, invDraft.gstRate, invDraft.placeOfSupply]);
 
-  /* ================= UI ================= */
   return (
     <main className="eventura-os">
-      <style jsx>{`
-        .rep-wrap { display: grid; gap: 14px; }
-
-        .rep-head {
-          display: flex;
-          justify-content: space-between;
-          align-items: flex-end;
-          flex-wrap: wrap;
-          gap: 12px;
-        }
-
-        .rep-title { font-size: 1.5rem; font-weight: 800; letter-spacing: 0.4px; }
-        .rep-sub { opacity: 0.78; font-size: 0.9rem; margin-top: 4px; }
-
-        .rep-toolbar {
-          display: flex;
-          gap: 10px;
-          flex-wrap: wrap;
-          align-items: center;
-          padding: 12px;
-          border-radius: 18px;
-          border: 1px solid rgba(255,255,255,0.08);
-          background: rgba(11, 16, 32, 0.78);
-          backdrop-filter: blur(10px);
-        }
-
-        .rep-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px,1fr)); gap: 12px; }
-
-        .rep-kpi {
-          border-radius: 20px;
-          padding: 16px;
-          border: 1px solid rgba(212,175,55,0.22);
-          background: linear-gradient(135deg, rgba(212,175,55,0.11), rgba(255,255,255,0.03));
-          box-shadow: 0 12px 34px rgba(0,0,0,0.24);
-        }
-        .rep-kpi-label { opacity: 0.75; font-size: 0.78rem; letter-spacing: 0.08em; text-transform: uppercase; }
-        .rep-kpi-value { font-size: 1.7rem; font-weight: 900; margin-top: 6px; }
-        .rep-kpi-note { margin-top: 6px; font-size: 0.82rem; opacity: 0.75; }
-
-        .rep-panels { display: grid; grid-template-columns: 1.2fr 0.8fr; gap: 12px; }
-        @media (max-width: 980px) { .rep-panels { grid-template-columns: 1fr; } }
-
-        .rep-panel {
-          border-radius: 22px;
-          padding: 16px;
-          border: 1px solid rgba(255,255,255,0.08);
-          background: rgba(11, 16, 32, 0.78);
-          backdrop-filter: blur(10px);
-        }
-
-        .rep-panel-title {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          gap: 10px;
-          margin-bottom: 10px;
-        }
-        .rep-panel-title h2 { font-size: 1.05rem; font-weight: 800; margin: 0; }
-
-        .rep-toggle {
-          border-radius: 999px;
-          border: 1px solid rgba(255,255,255,0.12);
-          background: rgba(255,255,255,0.04);
-          padding: 7px 12px;
-          cursor: pointer;
-          font-size: 0.8rem;
-          opacity: 0.92;
-        }
-        .rep-toggle:hover { background: rgba(255,255,255,0.08); }
-
-        .rep-ai {
-          border: 1px solid rgba(139,92,246,0.35);
-          background: linear-gradient(135deg, rgba(139,92,246,0.16), rgba(212,175,55,0.07));
-        }
-
-        .rep-pill {
-          display: inline-flex;
-          align-items: center;
-          gap: 8px;
-          padding: 10px 12px;
-          border-radius: 14px;
-          border: 1px solid rgba(255,255,255,0.10);
-          background: rgba(255,255,255,0.04);
-          margin: 6px 0;
-          font-size: 0.9rem;
-        }
-        .rep-good { border-color: rgba(34,197,94,0.35); }
-        .rep-warn { border-color: rgba(59,130,246,0.35); }
-        .rep-bad  { border-color: rgba(248,113,113,0.35); }
-
-        .rep-canvas {
-          width: 100%;
-          border-radius: 16px;
-          border: 1px solid rgba(255,255,255,0.08);
-          background: rgba(255,255,255,0.03);
-        }
-
-        .rep-table th {
-          font-size: 0.72rem;
-          text-transform: uppercase;
-          letter-spacing: 0.10em;
-          opacity: 0.7;
-        }
-        .rep-table td { font-size: 0.9rem; }
-
-        .rep-formrow { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
-        .rep-small { opacity: 0.78; font-size: 0.86rem; }
-        code { background: rgba(255,255,255,0.06); padding: 2px 6px; border-radius: 8px; }
-      `}</style>
-
       <aside className="eventura-sidebar">
-        <SidebarCore user={user} active="reports" />
+        <SidebarCore user={user} active="finance" />
       </aside>
 
       <div className="eventura-main">
         <TopbarCore user={user} />
 
-        <div className="eventura-content rep-wrap">
-          <div className="rep-head">
+        <div className="eventura-content">
+          <div className="eventura-header-row">
             <div>
-              <div className="rep-title">Reports & Analytics</div>
-              <div className="rep-sub">
-                Advanced • Editable • Removable • AI Insights • Export
-              </div>
+              <h1 className="eventura-page-title">Finance</h1>
+              <p className="eventura-subtitle">
+                Smart, auto & GST-ready finance for Eventura OS.
+              </p>
             </div>
-
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-              <Link href="/finance" className="eventura-button-secondary">
-                Open Finance
-              </Link>
-              <Link href="/events" className="eventura-button-secondary">
-                Open Events
-              </Link>
-              <Link href="/hr" className="eventura-button-secondary">
-                Open HR
-              </Link>
-              <Link href="/inventory" className="eventura-button-secondary">
-                Open Inventory
-              </Link>
-            </div>
-          </div>
-
-          {/* Toolbar */}
-          <div className="rep-toolbar">
-            <div className="eventura-small-text">Month:</div>
-            <select
-              className="eventura-search"
-              style={{ maxWidth: 220 }}
-              value={cfg.filter.month}
-              onChange={(e) =>
-                setCfg({ ...cfg, filter: { ...cfg.filter, month: e.target.value } })
-              }
-            >
-              {monthOptions.map((m) => (
-                <option key={m} value={m}>
-                  {m === "ALL" ? "ALL (Totals)" : m}
-                </option>
-              ))}
-            </select>
-
-            <div style={{ flex: 1 }} />
-
-            <button
-              className="eventura-tag eventura-tag-amber"
-              type="button"
-              onClick={() => {
-                if (!confirm("Reset Reports layout + thresholds to default?")) return;
-                setCfg(defaultCfg);
-              }}
-            >
-              Reset Reports
-            </button>
-          </div>
-
-          {/* EXECUTIVE KPIs */}
-          {cfg.sections.executive && (
-            <section className="rep-grid">
-              <div className="rep-kpi">
-                <div className="rep-kpi-label">Revenue</div>
-                <div className="rep-kpi-value">{INR(revenue)}</div>
-                <div className="rep-kpi-note">Income + event budgets</div>
-              </div>
-              <div className="rep-kpi">
-                <div className="rep-kpi-label">Net Profit</div>
-                <div className="rep-kpi-value">{INR(netProfit)}</div>
-                <div className="rep-kpi-note">Revenue − Expense − HR</div>
-              </div>
-              <div className="rep-kpi">
-                <div className="rep-kpi-label">HR Cost</div>
-                <div className="rep-kpi-value">{INR(hrCost)}</div>
-                <div className="rep-kpi-note">Core salary run</div>
-              </div>
-              <div className="rep-kpi">
-                <div className="rep-kpi-label">Inventory Value</div>
-                <div className="rep-kpi-value">{INR(invValue)}</div>
-                <div className="rep-kpi-note">Qty × unit cost</div>
-              </div>
-              <div className="rep-kpi">
-                <div className="rep-kpi-label">Avg Workload</div>
-                <div className="rep-kpi-value">{avgWorkload}%</div>
-                <div className="rep-kpi-note">Core utilization</div>
-              </div>
-              <div className="rep-kpi">
-                <div className="rep-kpi-label">Low Stock Alerts</div>
-                <div className="rep-kpi-value">{lowStockCount}</div>
-                <div className="rep-kpi-note">Editable rule below</div>
-              </div>
-            </section>
-          )}
-
-          {/* PANELS */}
-          <section className="rep-panels">
-            {/* Trend */}
-            {cfg.sections.trend && (
-              <div className="rep-panel">
-                <div className="rep-panel-title">
-                  <h2>Trend (Monthly)</h2>
-                  <button
-                    className="rep-toggle"
-                    type="button"
-                    onClick={() =>
-                      setCfg({ ...cfg, sections: { ...cfg.sections, trend: false } })
-                    }
-                    title="Remove this section"
-                  >
-                    Remove
-                  </button>
-                </div>
-                <canvas ref={chartRef} className="rep-canvas" />
-                <div className="rep-small" style={{ marginTop: 10 }}>
-                  Profit is approximate (uses HR monthly run).
-                </div>
-              </div>
-            )}
-
-            {/* AI + Settings */}
-            <div className={"rep-panel " + (cfg.sections.ai ? "rep-ai" : "")}>
-              <div className="rep-panel-title">
-                <h2>AI Insights + Settings</h2>
-                {cfg.sections.ai ? (
-                  <button
-                    className="rep-toggle"
-                    type="button"
-                    onClick={() =>
-                      setCfg({ ...cfg, sections: { ...cfg.sections, ai: false } })
-                    }
-                  >
-                    Remove AI
-                  </button>
-                ) : (
-                  <button
-                    className="rep-toggle"
-                    type="button"
-                    onClick={() =>
-                      setCfg({ ...cfg, sections: { ...cfg.sections, ai: true } })
-                    }
-                  >
-                    Add AI
-                  </button>
-                )}
-              </div>
-
-              {cfg.sections.ai && (
-                <div>
-                  {aiInsights.map((x, i) => (
-                    <div key={i} className={toneClass(x.tone)}>
-                      <span>✨</span>
-                      <span>{x.text}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              <div style={{ marginTop: 14 }}>
-                <div className="rep-small" style={{ marginBottom: 8 }}>
-                  Editable thresholds (updates insights live)
-                </div>
-
-                <div className="rep-formrow">
-                  <div className="eventura-small-text">Burnout ≥</div>
-                  <input
-                    className="eventura-search"
-                    style={{ width: 110 }}
-                    type="number"
-                    value={cfg.thresholds.burnoutWorkloadPct}
-                    onChange={(e) =>
-                      setCfg({
-                        ...cfg,
-                        thresholds: {
-                          ...cfg.thresholds,
-                          burnoutWorkloadPct: clamp(e.target.valueAsNumber, 0, 100),
-                        },
-                      })
-                    }
-                  />
-                  <div className="eventura-small-text">%</div>
-                </div>
-
-                <div className="rep-formrow" style={{ marginTop: 8 }}>
-                  <div className="eventura-small-text">HR Ratio warn ≥</div>
-                  <input
-                    className="eventura-search"
-                    style={{ width: 110 }}
-                    type="number"
-                    value={cfg.thresholds.hrCostRatioPct}
-                    onChange={(e) =>
-                      setCfg({
-                        ...cfg,
-                        thresholds: {
-                          ...cfg.thresholds,
-                          hrCostRatioPct: clamp(e.target.valueAsNumber, 0, 100),
-                        },
-                      })
-                    }
-                  />
-                  <div className="eventura-small-text">%</div>
-                </div>
-
-                <div className="rep-formrow" style={{ marginTop: 8 }}>
-                  <div className="eventura-small-text">Margin warn &lt;</div>
-                  <input
-                    className="eventura-search"
-                    style={{ width: 110 }}
-                    type="number"
-                    value={cfg.thresholds.marginWarnPct}
-                    onChange={(e) =>
-                      setCfg({
-                        ...cfg,
-                        thresholds: {
-                          ...cfg.thresholds,
-                          marginWarnPct: clamp(e.target.valueAsNumber, 0, 100),
-                        },
-                      })
-                    }
-                  />
-                  <div className="eventura-small-text">%</div>
-                </div>
-
-                <div className="rep-formrow" style={{ marginTop: 8 }}>
-                  <div className="eventura-small-text">Low stock rule</div>
-                  <select
-                    className="eventura-search"
-                    value={cfg.thresholds.lowStockRule}
-                    onChange={(e) =>
-                      setCfg({
-                        ...cfg,
-                        thresholds: {
-                          ...cfg.thresholds,
-                          lowStockRule: e.target.value as ReportsConfig["thresholds"]["lowStockRule"],
-                        },
-                      })
-                    }
-                  >
-                    <option value="LEQ_MIN">Qty ≤ MinQty</option>
-                    <option value="LEQ_MIN_PLUS5">Qty ≤ MinQty + 5</option>
-                  </select>
-                </div>
-
-                <div style={{ marginTop: 12 }} className="rep-small">
-                  Ratios: HR {hrRatioPct.toFixed(1)}% • Margin {marginPct.toFixed(1)}%
-                </div>
-              </div>
-            </div>
-          </section>
-
-          {/* HR */}
-          {cfg.sections.hr && (
-            <section className="rep-panel">
-              <div className="rep-panel-title">
-                <h2>HR Analytics</h2>
-                <button
-                  className="rep-toggle"
-                  type="button"
-                  onClick={() =>
-                    setCfg({ ...cfg, sections: { ...cfg.sections, hr: false } })
-                  }
-                >
-                  Remove
-                </button>
-              </div>
-
-              <div className="rep-small" style={{ marginBottom: 10 }}>
-                Burnout threshold: <code>{cfg.thresholds.burnoutWorkloadPct}%</code>
-              </div>
-
-              <div className="eventura-table-wrapper">
-                <table className="eventura-table rep-table">
-                  <thead>
-                    <tr>
-                      <th>Member</th>
-                      <th>Status</th>
-                      <th>Workload</th>
-                      <th>Salary</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {team
-                      .filter((m) => m.status === "Core")
-                      .sort((a, b) => (b.workload || 0) - (a.workload || 0))
-                      .slice(0, 12)
-                      .map((m, idx) => (
-                        <tr key={m.id ?? idx}>
-                          <td>
-                            <div className="eventura-list-title">
-                              {m.name || `Core Staff #${idx + 1}`}
-                            </div>
-                            <div className="eventura-list-sub">{m.role || ""}</div>
-                          </td>
-                          <td>{m.status}</td>
-                          <td>
-                            <span className="eventura-tag eventura-tag-blue">
-                              {(m.workload || 0)}%
-                            </span>
-                          </td>
-                          <td>{INR(m.monthlySalary || 0)}</td>
-                        </tr>
-                      ))}
-                    {team.filter((m) => m.status === "Core").length === 0 && (
-                      <tr>
-                        <td colSpan={4} className="eventura-small-text">
-                          No HR data found in <code>{DB_HR}</code>. Add team members in HR tab.
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-
-              {burnoutList.length > 0 && (
-                <div style={{ marginTop: 10 }} className="rep-pill rep-warn">
-                  ⚠ Burnout:{" "}
-                  {burnoutList.map((m) => m.name || "Staff").join(", ")}
-                </div>
-              )}
-            </section>
-          )}
-
-          {/* INVENTORY */}
-          {cfg.sections.inventory && (
-            <section className="rep-panel">
-              <div className="rep-panel-title">
-                <h2>Inventory Analytics</h2>
-                <button
-                  className="rep-toggle"
-                  type="button"
-                  onClick={() =>
-                    setCfg({
-                      ...cfg,
-                      sections: { ...cfg.sections, inventory: false },
-                    })
-                  }
-                >
-                  Remove
-                </button>
-              </div>
-
-              <div className="rep-small" style={{ marginBottom: 10 }}>
-                Low stock rule: <code>{cfg.thresholds.lowStockRule}</code>
-              </div>
-
-              <div className="eventura-table-wrapper">
-                <table className="eventura-table rep-table">
-                  <thead>
-                    <tr>
-                      <th>Item</th>
-                      <th>Qty</th>
-                      <th>Min</th>
-                      <th>Value</th>
-                      <th>Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {inv
-                      .slice()
-                      .sort((a, b) => (a.qtyOnHand || 0) - (b.qtyOnHand || 0))
-                      .slice(0, 12)
-                      .map((i) => (
-                        <tr key={i.id}>
-                          <td>
-                            <div className="eventura-list-title">{i.name}</div>
-                            <div className="eventura-list-sub">
-                              {i.category || ""} {i.sku ? `· ${i.sku}` : ""}
-                            </div>
-                          </td>
-                          <td>{i.qtyOnHand}</td>
-                          <td>{i.minQty}</td>
-                          <td>{INR((i.unitCost || 0) * Math.max(0, i.qtyOnHand || 0))}</td>
-                          <td>{i.status || ""}</td>
-                        </tr>
-                      ))}
-                    {inv.length === 0 && (
-                      <tr>
-                        <td colSpan={5} className="eventura-small-text">
-                          No Inventory data found in <code>{DB_INV}</code>. Add items in Inventory tab.
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </section>
-          )}
-
-          {/* EVENTS */}
-          {cfg.sections.events && (
-            <section className="rep-panel">
-              <div className="rep-panel-title">
-                <h2>Events Snapshot</h2>
-                <button
-                  className="rep-toggle"
-                  type="button"
-                  onClick={() =>
-                    setCfg({ ...cfg, sections: { ...cfg.sections, events: false } })
-                  }
-                >
-                  Remove
-                </button>
-              </div>
-
-              <div className="eventura-table-wrapper">
-                <table className="eventura-table rep-table">
-                  <thead>
-                    <tr>
-                      <th>Date</th>
-                      <th>Event</th>
-                      <th>Status</th>
-                      <th>Budget</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {eventTable.slice(0, 14).map((e) => (
-                      <tr key={e.id}>
-                        <td>{e.date}</td>
-                        <td>
-                          <div className="eventura-list-title">{e.title}</div>
-                        </td>
-                        <td>{e.status}</td>
-                        <td>{INR(e.budget)}</td>
-                      </tr>
-                    ))}
-                    {eventTable.length === 0 && (
-                      <tr>
-                        <td colSpan={4} className="eventura-small-text">
-                          No events found in <code>{DB_EVENTS}</code>. Add events in Events tab.
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </section>
-          )}
-
-          {/* EXPORTS */}
-          {cfg.sections.exports && (
-            <section className="rep-panel">
-              <div className="rep-panel-title">
-                <h2>Export & Backup</h2>
-                <button
-                  className="rep-toggle"
-                  type="button"
-                  onClick={() =>
-                    setCfg({ ...cfg, sections: { ...cfg.sections, exports: false } })
-                  }
-                >
-                  Remove
-                </button>
-              </div>
-
-              <div className="rep-formrow" style={{ marginBottom: 10 }}>
-                <button
-                  className="eventura-button-secondary"
-                  type="button"
-                  onClick={exportCSV}
-                >
-                  Export CSV
-                </button>
-                <button
-                  className="eventura-button-secondary"
-                  type="button"
-                  onClick={exportJSON}
-                >
-                  Export JSON
-                </button>
-              </div>
-
-              <textarea
-                className="eventura-search"
-                style={{ width: "100%", height: 240 }}
-                placeholder="Export JSON appears here. Paste JSON here to import (config only)."
-                value={backupText}
-                onChange={(e) => setBackupText(e.target.value)}
-              />
-
-              <div className="rep-formrow" style={{ marginTop: 10 }}>
-                <button
-                  className="eventura-tag eventura-tag-amber"
-                  type="button"
-                  onClick={importJSON}
-                >
-                  Import Config JSON
-                </button>
-                <div className="rep-small">
-                  Stores config in <code>{DB_REPORTS_CFG}</code>
-                </div>
-              </div>
-            </section>
-          )}
-
-          {/* Add back removed sections */}
-          <section className="rep-toolbar">
-            <div className="rep-small">Toggle sections:</div>
-
-            {Object.entries(cfg.sections).map(([k, v]) => (
+            <div className="eventura-chips-row">
               <button
-                key={k}
-                className={"eventura-tag " + (v ? "eventura-tag-green" : "eventura-tag-amber")}
                 type="button"
-                onClick={() =>
-                  setCfg({
-                    ...cfg,
-                    sections: { ...cfg.sections, [k]: !v } as ReportsConfig["sections"],
-                  })
-                }
+                className={"eventura-tag " + (view === "dashboard" ? "eventura-tag-blue" : "eventura-tag-amber")}
+                onClick={() => setView("dashboard")}
               >
-                {v ? `Hide ${k}` : `Show ${k}`}
+                Dashboard
               </button>
-            ))}
+              <button
+                type="button"
+                className={"eventura-tag " + (view === "transactions" ? "eventura-tag-blue" : "eventura-tag-amber")}
+                onClick={() => setView("transactions")}
+              >
+                Transactions
+              </button>
+              <button
+                type="button"
+                className={"eventura-tag " + (view === "invoices" ? "eventura-tag-blue" : "eventura-tag-amber")}
+                onClick={() => setView("invoices")}
+              >
+                GST Invoices
+              </button>
+            </div>
+          </div>
+
+          {/* Global controls */}
+          <section className="eventura-columns" style={{ marginTop: "0.8rem" }}>
+            <div className="eventura-panel">
+              <h2 className="eventura-panel-title">Filters</h2>
+              <div className="eventura-form-grid">
+                <div className="eventura-field">
+                  <label className="eventura-label">Month (YYYY-MM)</label>
+                  <input
+                    className="eventura-input"
+                    value={monthFilter}
+                    onChange={(e) => setMonthFilter(e.target.value)}
+                    placeholder="2025-12"
+                  />
+                </div>
+                <div className="eventura-field">
+                  <label className="eventura-label">Search</label>
+                  <input
+                    className="eventura-input"
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    placeholder="Search invoices / transactions..."
+                  />
+                </div>
+              </div>
+              <p className="eventura-small-text" style={{ marginTop: "0.5rem" }}>
+                Tip: Use month like <b>2025-12</b> to view that month’s P&L & GST.
+              </p>
+            </div>
+
+            <div className="eventura-panel">
+              <h2 className="eventura-panel-title">Quick KPIs ({monthFilter})</h2>
+              <div className="eventura-kpi-row">
+                <div className="eventura-card">
+                  <div className="eventura-card-label">Income</div>
+                  <div className="eventura-card-value">₹{fmtINR(kpis.income)}</div>
+                  <div className="eventura-card-note">Cleared + pending included</div>
+                </div>
+                <div className="eventura-card">
+                  <div className="eventura-card-label">Expenses</div>
+                  <div className="eventura-card-value">₹{fmtINR(kpis.expense)}</div>
+                  <div className="eventura-card-note">Including vendor + ops</div>
+                </div>
+                <div className="eventura-card">
+                  <div className="eventura-card-label">Profit</div>
+                  <div className="eventura-card-value">₹{fmtINR(kpis.profit)}</div>
+                  <div className="eventura-card-note">Income − Expense</div>
+                </div>
+                <div className="eventura-card">
+                  <div className="eventura-card-label">GST Payable (est.)</div>
+                  <div className="eventura-card-value">₹{fmtINR(kpis.gstPayable)}</div>
+                  <div className="eventura-card-note">From posted tax lines</div>
+                </div>
+              </div>
+
+              <div className="eventura-kpi-row" style={{ marginTop: "0.6rem" }}>
+                <div className="eventura-card">
+                  <div className="eventura-card-label">Receivable (Open invoices)</div>
+                  <div className="eventura-card-value">₹{fmtINR(kpis.receivable)}</div>
+                  <div className="eventura-card-note">Draft/Sent totals</div>
+                </div>
+                <div className="eventura-card">
+                  <div className="eventura-card-label">Cash Net (Cleared)</div>
+                  <div className="eventura-card-value">₹{fmtINR(kpis.cashNet)}</div>
+                  <div className="eventura-card-note">Cleared income − cleared expense</div>
+                </div>
+              </div>
+            </div>
           </section>
+
+          {/* DASHBOARD */}
+          {view === "dashboard" && (
+            <section className="eventura-columns" style={{ marginTop: "0.8rem" }}>
+              <div className="eventura-panel">
+                <h2 className="eventura-panel-title">Smart actions</h2>
+                <ul className="eventura-bullets">
+                  <li>Create GST invoices and mark them paid → auto posts revenue + tax payable.</li>
+                  <li>Use Transactions for vendor payments, marketing, salaries, rent, etc.</li>
+                  <li>Keep Place of Supply correct to auto-select IGST vs CGST/SGST.</li>
+                </ul>
+                <div className="eventura-actions" style={{ marginTop: "0.8rem" }}>
+                  <button className="eventura-button" onClick={() => setView("invoices")} type="button">
+                    + Create GST Invoice
+                  </button>
+                  <button className="eventura-button-secondary" onClick={() => setView("transactions")} type="button">
+                    + Add Transaction
+                  </button>
+                  {isCEO && (
+                    <Link className="eventura-button-secondary" href="/reports">
+                      Open Reports
+                    </Link>
+                  )}
+                </div>
+              </div>
+
+              <div className="eventura-panel">
+                <h2 className="eventura-panel-title">GST Snapshot ({monthFilter})</h2>
+                <div className="eventura-table-wrapper">
+                  <table className="eventura-table">
+                    <thead>
+                      <tr>
+                        <th>Type</th>
+                        <th>Amount (₹)</th>
+                        <th>Note</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td>GST Payable (posted)</td>
+                        <td>₹{fmtINR(kpis.gstPayable)}</td>
+                        <td className="eventura-small-text">From Tax category lines</td>
+                      </tr>
+                      <tr>
+                        <td>Open Receivables</td>
+                        <td>₹{fmtINR(kpis.receivable)}</td>
+                        <td className="eventura-small-text">Draft/Sent invoices total (incl GST)</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+                <p className="eventura-small-text" style={{ marginTop: "0.5rem" }}>
+                  Next upgrade (if you want): <b>GSTR-1 summary</b> + <b>HSN-wise</b> export.
+                </p>
+              </div>
+            </section>
+          )}
+
+          {/* TRANSACTIONS */}
+          {view === "transactions" && (
+            <section className="eventura-columns" style={{ marginTop: "0.8rem" }}>
+              <div className="eventura-panel">
+                <h2 className="eventura-panel-title">Add transaction</h2>
+                <form className="eventura-form" onSubmit={addTx}>
+                  <div className="eventura-form-grid">
+                    <div className="eventura-field">
+                      <label className="eventura-label">Date</label>
+                      <input
+                        className="eventura-input"
+                        type="date"
+                        value={txDraft.date}
+                        onChange={(e) => setTxDraft((p) => ({ ...p, date: e.target.value }))}
+                      />
+                    </div>
+                    <div className="eventura-field">
+                      <label className="eventura-label">Type</label>
+                      <select
+                        className="eventura-input"
+                        value={txDraft.type}
+                        onChange={(e) => setTxDraft((p) => ({ ...p, type: e.target.value as TxType }))}
+                      >
+                        <option>Income</option>
+                        <option>Expense</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="eventura-form-grid">
+                    <div className="eventura-field">
+                      <label className="eventura-label">Category</label>
+                      <input
+                        className="eventura-input"
+                        value={txDraft.category}
+                        onChange={(e) => setTxDraft((p) => ({ ...p, category: e.target.value }))}
+                        placeholder="Revenue / Vendor / Salaries / Rent / Marketing / Tax"
+                      />
+                    </div>
+                    <div className="eventura-field">
+                      <label className="eventura-label">Status</label>
+                      <select
+                        className="eventura-input"
+                        value={txDraft.status}
+                        onChange={(e) => setTxDraft((p) => ({ ...p, status: e.target.value as TxStatus }))}
+                      >
+                        <option>Cleared</option>
+                        <option>Pending</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="eventura-form-grid">
+                    <div className="eventura-field">
+                      <label className="eventura-label">Amount (₹)</label>
+                      <input
+                        className="eventura-input"
+                        type="number"
+                        value={txDraft.amount}
+                        onChange={(e) => setTxDraft((p) => ({ ...p, amount: safeNum(e.target.value, 0) }))}
+                      />
+                    </div>
+                    <div className="eventura-field">
+                      <label className="eventura-label">From</label>
+                      <input
+                        className="eventura-input"
+                        value={txDraft.fromAccount}
+                        onChange={(e) => setTxDraft((p) => ({ ...p, fromAccount: e.target.value }))}
+                        placeholder="Bank / Cash / Receivable"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="eventura-form-grid">
+                    <div className="eventura-field">
+                      <label className="eventura-label">To</label>
+                      <input
+                        className="eventura-input"
+                        value={txDraft.toAccount}
+                        onChange={(e) => setTxDraft((p) => ({ ...p, toAccount: e.target.value }))}
+                        placeholder="Revenue / Vendor / GST Payable"
+                      />
+                    </div>
+                    <div className="eventura-field">
+                      <label className="eventura-label">Description</label>
+                      <input
+                        className="eventura-input"
+                        value={txDraft.description}
+                        onChange={(e) => setTxDraft((p) => ({ ...p, description: e.target.value }))}
+                        placeholder="e.g. Decor advance paid, Office rent, Lead payment..."
+                      />
+                    </div>
+                  </div>
+
+                  <div className="eventura-actions" style={{ marginTop: "0.6rem" }}>
+                    <button className="eventura-button" type="submit">
+                      Save transaction
+                    </button>
+                  </div>
+                </form>
+              </div>
+
+              <div className="eventura-panel">
+                <h2 className="eventura-panel-title">Transactions ({monthFilter})</h2>
+                <div className="eventura-table-wrapper">
+                  <table className="eventura-table">
+                    <thead>
+                      <tr>
+                        <th>Date</th>
+                        <th>Type</th>
+                        <th>Category</th>
+                        <th>Description</th>
+                        <th>Amount (₹)</th>
+                        <th>Status</th>
+                        <th />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {txFiltered.length === 0 ? (
+                        <tr>
+                          <td colSpan={7} className="eventura-small-text" style={{ color: "#9ca3af" }}>
+                            No transactions for this filter.
+                          </td>
+                        </tr>
+                      ) : (
+                        txFiltered.map((t) => (
+                          <tr key={t.id}>
+                            <td>{t.date}</td>
+                            <td>
+                              <span className={"eventura-tag " + (t.type === "Income" ? "eventura-tag-green" : "eventura-tag-amber")}>
+                                {t.type}
+                              </span>
+                            </td>
+                            <td>{t.category}</td>
+                            <td>
+                              <div className="eventura-list-title">{t.description}</div>
+                              <div className="eventura-list-sub">
+                                {t.fromAccount} → {t.toAccount}
+                                {t.relatedInvoiceId ? ` · Invoice# ${t.relatedInvoiceId}` : ""}
+                              </div>
+                            </td>
+                            <td>₹{fmtINR(t.amount)}</td>
+                            <td>{t.status}</td>
+                            <td>
+                              <button className="eventura-tag eventura-tag-amber" type="button" onClick={() => deleteTx(t.id)}>
+                                Delete
+                              </button>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </section>
+          )}
+
+          {/* INVOICES (GST) */}
+          {view === "invoices" && (
+            <section className="eventura-columns" style={{ marginTop: "0.8rem" }}>
+              {/* Create GST invoice */}
+              <div className="eventura-panel">
+                <h2 className="eventura-panel-title">Create GST Invoice</h2>
+                <p className="eventura-small-text">
+                  Place of Supply decides tax type automatically: <b>Gujarat</b> → CGST/SGST, other state → IGST.
+                </p>
+
+                <form className="eventura-form" onSubmit={createInvoice}>
+                  <div className="eventura-form-grid">
+                    <div className="eventura-field">
+                      <label className="eventura-label">Invoice date</label>
+                      <input
+                        className="eventura-input"
+                        type="date"
+                        value={invDraft.date}
+                        onChange={(e) => setInvDraft((p) => ({ ...p, date: e.target.value }))}
+                      />
+                    </div>
+                    <div className="eventura-field">
+                      <label className="eventura-label">Due date</label>
+                      <input
+                        className="eventura-input"
+                        type="date"
+                        value={invDraft.dueDate}
+                        onChange={(e) => setInvDraft((p) => ({ ...p, dueDate: e.target.value }))}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="eventura-form-grid">
+                    <div className="eventura-field">
+                      <label className="eventura-label">Client name</label>
+                      <input
+                        className="eventura-input"
+                        value={invDraft.clientName}
+                        onChange={(e) => setInvDraft((p) => ({ ...p, clientName: e.target.value }))}
+                        placeholder="Client / Company"
+                      />
+                    </div>
+                    <div className="eventura-field">
+                      <label className="eventura-label">Client GSTIN (optional)</label>
+                      <input
+                        className="eventura-input"
+                        value={invDraft.clientGSTIN || ""}
+                        onChange={(e) => setInvDraft((p) => ({ ...p, clientGSTIN: e.target.value }))}
+                        placeholder="For B2B invoices"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="eventura-form-grid">
+                    <div className="eventura-field">
+                      <label className="eventura-label">Event name (optional)</label>
+                      <input
+                        className="eventura-input"
+                        value={invDraft.eventName || ""}
+                        onChange={(e) => setInvDraft((p) => ({ ...p, eventName: e.target.value }))}
+                        placeholder="Patel Wedding / Corporate Gala"
+                      />
+                    </div>
+                    <div className="eventura-field">
+                      <label className="eventura-label">City (optional)</label>
+                      <input
+                        className="eventura-input"
+                        value={invDraft.city || ""}
+                        onChange={(e) => setInvDraft((p) => ({ ...p, city: e.target.value }))}
+                        placeholder="Surat / Ahmedabad / Mumbai"
+                      />
+                    </div>
+                  </div>
+
+                  <h3 className="eventura-subsection-title" style={{ marginTop: "1rem" }}>
+                    GST Details
+                  </h3>
+
+                  <div className="eventura-form-grid">
+                    <div className="eventura-field">
+                      <label className="eventura-label">Place of Supply</label>
+                      <input
+                        className="eventura-input"
+                        value={invDraft.placeOfSupply}
+                        onChange={(e) =>
+                          setInvDraft((p) => ({
+                            ...p,
+                            placeOfSupply: e.target.value,
+                            gstType: detectGSTType(e.target.value),
+                          }))
+                        }
+                        placeholder="Gujarat / Maharashtra / Rajasthan ..."
+                      />
+                      <div className="eventura-small-text" style={{ marginTop: "0.25rem" }}>
+                        Auto: <b>{detectGSTType(invDraft.placeOfSupply) === "IGST" ? "IGST" : "CGST + SGST"}</b>
+                      </div>
+                    </div>
+
+                    <div className="eventura-field">
+                      <label className="eventura-label">HSN / SAC</label>
+                      <input
+                        className="eventura-input"
+                        value={invDraft.hsn}
+                        onChange={(e) => setInvDraft((p) => ({ ...p, hsn: e.target.value }))}
+                        placeholder="9983"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="eventura-form-grid">
+                    <div className="eventura-field">
+                      <label className="eventura-label">GST %</label>
+                      <input
+                        className="eventura-input"
+                        type="number"
+                        value={invDraft.gstRate}
+                        onChange={(e) => setInvDraft((p) => ({ ...p, gstRate: safeNum(e.target.value, 18) }))}
+                      />
+                    </div>
+                    <div className="eventura-field">
+                      <label className="eventura-label">Status</label>
+                      <select
+                        className="eventura-input"
+                        value={invDraft.status}
+                        onChange={(e) => setInvDraft((p) => ({ ...p, status: e.target.value as InvoiceStatus }))}
+                      >
+                        <option>Draft</option>
+                        <option>Sent</option>
+                        <option>Paid</option>
+                        <option>Cancelled</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <h3 className="eventura-subsection-title" style={{ marginTop: "1rem" }}>
+                    Items
+                  </h3>
+
+                  <div className="eventura-table-wrapper">
+                    <table className="eventura-table">
+                      <thead>
+                        <tr>
+                          <th>Item</th>
+                          <th>Qty</th>
+                          <th>Rate</th>
+                          <th>Line Total</th>
+                          <th />
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {invDraft.items.map((it) => {
+                          const line = safeNum(it.qty, 1) * safeNum(it.rate, 0);
+                          return (
+                            <tr key={it.id}>
+                              <td>
+                                <input
+                                  className="eventura-input"
+                                  value={it.name}
+                                  onChange={(e) =>
+                                    setInvDraft((p) => ({
+                                      ...p,
+                                      items: p.items.map((x) => (x.id === it.id ? { ...x, name: e.target.value } : x)),
+                                    }))
+                                  }
+                                  placeholder="Event planning / Decor / Management fee..."
+                                />
+                              </td>
+                              <td style={{ width: 90 }}>
+                                <input
+                                  className="eventura-input"
+                                  type="number"
+                                  value={it.qty}
+                                  onChange={(e) =>
+                                    setInvDraft((p) => ({
+                                      ...p,
+                                      items: p.items.map((x) => (x.id === it.id ? { ...x, qty: safeNum(e.target.value, 1) } : x)),
+                                    }))
+                                  }
+                                />
+                              </td>
+                              <td style={{ width: 140 }}>
+                                <input
+                                  className="eventura-input"
+                                  type="number"
+                                  value={it.rate}
+                                  onChange={(e) =>
+                                    setInvDraft((p) => ({
+                                      ...p,
+                                      items: p.items.map((x) => (x.id === it.id ? { ...x, rate: safeNum(e.target.value, 0) } : x)),
+                                    }))
+                                  }
+                                />
+                              </td>
+                              <td>₹{fmtINR(line)}</td>
+                              <td>
+                                <button
+                                  type="button"
+                                  className="eventura-tag eventura-tag-amber"
+                                  onClick={() =>
+                                    setInvDraft((p) => ({
+                                      ...p,
+                                      items: p.items.length === 1 ? p.items : p.items.filter((x) => x.id !== it.id),
+                                    }))
+                                  }
+                                >
+                                  Remove
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <div className="eventura-actions" style={{ marginTop: "0.6rem" }}>
+                    <button
+                      type="button"
+                      className="eventura-button-secondary"
+                      onClick={() =>
+                        setInvDraft((p) => ({
+                          ...p,
+                          items: [
+                            ...p.items,
+                            { id: Date.now(), name: "Service", qty: 1, rate: 0 },
+                          ],
+                        }))
+                      }
+                    >
+                      + Add item
+                    </button>
+                  </div>
+
+                  <div className="eventura-field" style={{ marginTop: "0.8rem" }}>
+                    <label className="eventura-label">Notes</label>
+                    <textarea
+                      className="eventura-textarea"
+                      value={invDraft.notes}
+                      onChange={(e) => setInvDraft((p) => ({ ...p, notes: e.target.value }))}
+                      placeholder="Payment terms, scope, etc..."
+                    />
+                  </div>
+
+                  {/* Preview totals */}
+                  <div className="eventura-kpi-row" style={{ marginTop: "0.8rem" }}>
+                    <div className="eventura-card">
+                      <div className="eventura-card-label">Taxable</div>
+                      <div className="eventura-card-value">₹{fmtINR(invPreviewTotals.taxable)}</div>
+                    </div>
+                    <div className="eventura-card">
+                      <div className="eventura-card-label">
+                        {invPreviewTotals.igst > 0 ? "IGST" : "CGST"}
+                      </div>
+                      <div className="eventura-card-value">₹{fmtINR(invPreviewTotals.igst > 0 ? invPreviewTotals.igst : invPreviewTotals.cgst)}</div>
+                      <div className="eventura-card-note">
+                        Rate: {invDraft.gstRate}%
+                      </div>
+                    </div>
+                    {invPreviewTotals.igst === 0 && (
+                      <div className="eventura-card">
+                        <div className="eventura-card-label">SGST</div>
+                        <div className="eventura-card-value">₹{fmtINR(invPreviewTotals.sgst)}</div>
+                        <div className="eventura-card-note">Half GST</div>
+                      </div>
+                    )}
+                    <div className="eventura-card">
+                      <div className="eventura-card-label">Invoice Total</div>
+                      <div className="eventura-card-value">₹{fmtINR(invPreviewTotals.total)}</div>
+                      <div className="eventura-card-note">{amountInWordsSimpleINR(invPreviewTotals.total)}</div>
+                    </div>
+                  </div>
+
+                  <div className="eventura-actions" style={{ marginTop: "0.8rem" }}>
+                    <button type="submit" className="eventura-button">
+                      Save GST Invoice
+                    </button>
+                  </div>
+                </form>
+              </div>
+
+              {/* Invoices list */}
+              <div className="eventura-panel">
+                <h2 className="eventura-panel-title">Invoices</h2>
+
+                <div className="eventura-table-wrapper">
+                  <table className="eventura-table">
+                    <thead>
+                      <tr>
+                        <th>Invoice</th>
+                        <th>Client</th>
+                        <th>POS</th>
+                        <th>GST</th>
+                        <th>Total (₹)</th>
+                        <th>Status</th>
+                        <th />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {invFiltered.length === 0 ? (
+                        <tr>
+                          <td colSpan={7} className="eventura-small-text" style={{ color: "#9ca3af" }}>
+                            No invoices yet. Create one on the left.
+                          </td>
+                        </tr>
+                      ) : (
+                        invFiltered.map((i) => {
+                          const sub = invSubTotal(i);
+                          const gst = calcGST(sub, i.gstRate, i.gstType);
+                          return (
+                            <tr key={i.id}>
+                              <td>
+                                <div className="eventura-list-title">{i.invoiceNo}</div>
+                                <div className="eventura-list-sub">
+                                  {i.date} → Due {i.dueDate}
+                                  {i.paidDate ? ` · Paid ${i.paidDate}` : ""}
+                                </div>
+                              </td>
+                              <td>
+                                <div className="eventura-list-title">{i.clientName}</div>
+                                <div className="eventura-list-sub">
+                                  {i.clientGSTIN ? `GSTIN: ${i.clientGSTIN}` : "B2C"}
+                                  {i.eventName ? ` · ${i.eventName}` : ""}
+                                </div>
+                              </td>
+                              <td>{i.placeOfSupply}</td>
+                              <td>
+                                <div className="eventura-small-text">
+                                  {i.gstType === "IGST" ? (
+                                    <>IGST {i.gstRate}%</>
+                                  ) : (
+                                    <>CGST {i.gstRate / 2}% + SGST {i.gstRate / 2}%</>
+                                  )}
+                                  <br />
+                                  SAC/HSN: {i.hsn}
+                                </div>
+                              </td>
+                              <td>
+                                <div className="eventura-list-title">₹{fmtINR(gst.total)}</div>
+                                <div className="eventura-list-sub">
+                                  Taxable ₹{fmtINR(gst.taxable)}
+                                </div>
+                              </td>
+                              <td>
+                                <span
+                                  className={
+                                    "eventura-tag " +
+                                    (i.status === "Paid"
+                                      ? "eventura-tag-green"
+                                      : i.status === "Cancelled"
+                                      ? "eventura-tag-amber"
+                                      : "eventura-tag-blue")
+                                  }
+                                >
+                                  {i.status}
+                                </span>
+                              </td>
+                              <td style={{ whiteSpace: "nowrap" }}>
+                                <select
+                                  className="eventura-input"
+                                  value={i.status}
+                                  onChange={(e) => setInvoiceStatus(i.id, e.target.value as InvoiceStatus)}
+                                  style={{ width: 120, display: "inline-block", marginRight: 8 }}
+                                >
+                                  <option>Draft</option>
+                                  <option>Sent</option>
+                                  <option>Paid</option>
+                                  <option>Cancelled</option>
+                                </select>
+
+                                {i.status !== "Paid" && (
+                                  <button
+                                    type="button"
+                                    className="eventura-tag eventura-tag-green"
+                                    onClick={() => markInvoicePaid(i.id)}
+                                    style={{ marginRight: 8 }}
+                                  >
+                                    Mark Paid
+                                  </button>
+                                )}
+
+                                <button
+                                  type="button"
+                                  className="eventura-tag eventura-tag-amber"
+                                  onClick={() => deleteInvoice(i.id)}
+                                >
+                                  Delete
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="eventura-panel" style={{ marginTop: "1rem" }}>
+                  <h2 className="eventura-panel-title">Company GST Profile</h2>
+                  <div className="eventura-small-text">
+                    <b>{COMPANY_GST.legalName}</b><br />
+                    GSTIN: {COMPANY_GST.gstin}<br />
+                    State: {COMPANY_GST.state} ({COMPANY_GST.stateCode})<br />
+                    Address: {COMPANY_GST.address}<br />
+                    Bank: {COMPANY_GST.bankName} · A/C: {COMPANY_GST.accountNo} · IFSC: {COMPANY_GST.ifsc}<br />
+                    PAN: {COMPANY_GST.pan}
+                  </div>
+                </div>
+              </div>
+            </section>
+          )}
         </div>
       </div>
     </main>
   );
 }
 
-/* ================= Shared layout ================= */
+/* ================= SHARED LAYOUT ================= */
+
 function SidebarCore({ user, active }: { user: User; active: string }) {
   const isCEO = user.role === "CEO";
   return (
@@ -1255,15 +1291,13 @@ function SidebarCore({ user, active }: { user: User; active: string }) {
         <SidebarLink href="/vendors" label="Vendors" icon="🤝" active={active === "vendors"} />
         {isCEO && <SidebarLink href="/finance" label="Finance" icon="💰" active={active === "finance"} />}
         <SidebarLink href="/hr" label="HR & Team" icon="🧑‍💼" active={active === "hr"} />
-        <SidebarLink href="/inventory" label="Inventory" icon="📦" active={active === "inventory"} />
+        <SidebarLink href="/inventory" label="Inventory & Assets" icon="📦" active={active === "inventory"} />
         {isCEO && <SidebarLink href="/reports" label="Reports & Analytics" icon="📈" active={active === "reports"} />}
         {isCEO && <SidebarLink href="/settings" label="Settings & Access" icon="⚙️" active={active === "settings"} />}
       </nav>
 
       <div className="eventura-sidebar-footer">
-        <div className="eventura-sidebar-role">
-          Role: {user.role === "CEO" ? "CEO / Super Admin" : "Staff"}
-        </div>
+        <div className="eventura-sidebar-role">Role: {user.role === "CEO" ? "CEO / Super Admin" : "Staff"}</div>
         <div className="eventura-sidebar-city">City: {user.city}</div>
       </div>
     </>
@@ -1277,10 +1311,10 @@ function TopbarCore({ user }: { user: User }) {
         <div className="eventura-topbar-location">📍 {user.city}, Gujarat</div>
       </div>
       <div className="eventura-topbar-center">
-        <input className="eventura-search" placeholder="Search reports..." />
+        <input className="eventura-search" placeholder="Search finance..." disabled />
       </div>
       <div className="eventura-topbar-right">
-        <button className="eventura-topbar-icon" title="Notifications">
+        <button className="eventura-topbar-icon" title="Notifications" type="button">
           🔔
         </button>
         <div className="eventura-user-avatar" title={user.name}>
@@ -1292,8 +1326,7 @@ function TopbarCore({ user }: { user: User }) {
 }
 
 function SidebarLink(props: { href: string; label: string; icon: string; active?: boolean }) {
-  const className =
-    "eventura-sidebar-link" + (props.active ? " eventura-sidebar-link-active" : "");
+  const className = "eventura-sidebar-link" + (props.active ? " eventura-sidebar-link-active" : "");
   return (
     <Link href={props.href} className={className}>
       <span className="eventura-sidebar-icon">{props.icon}</span>
