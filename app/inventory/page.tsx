@@ -3,198 +3,134 @@
 import React, { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 
-/* =========================================================
-   EVENTURA OS — FINANCE (Advanced + Smart + Indian GST Invoice)
-   File: app/finance/page.tsx
-   ✅ Vercel-safe (client only)
-   ✅ Works with localStorage
-   ✅ Indian GST Invoice: CGST/SGST vs IGST auto
-   ✅ Mark Invoice Paid → auto posts revenue + GST payable transactions
-========================================================= */
-
-/* ================= AUTH ================= */
+/* ================== AUTH / USER ================== */
 type Role = "CEO" | "Staff";
 type User = { name: string; role: Role; city: string };
 
 const USER_KEY = "eventura-user";
-const FIN_TX_KEY = "eventura-finance-transactions-v2";
-const FIN_INV_KEY = "eventura-finance-invoices-gst-v2";
 
-/* ================= GST PROFILE ================= */
-type GSTProfile = {
-  legalName: string;
-  gstin: string;
-  state: string;
-  stateCode: string;
-  address: string;
-  bankName: string;
-  accountNo: string;
-  ifsc: string;
-  pan: string;
-};
+/* ================== STORAGE KEYS ================== */
+const INV_ITEMS_KEY = "eventura-inventory-items";
+const INV_TX_KEY = "eventura-inventory-tx";
+const INV_INVOICES_KEY = "eventura-inventory-invoices";
 
-const COMPANY_GST: GSTProfile = {
-  legalName: "Eventura Events & Weddings LLP",
-  gstin: "24ABCDE1234F1Z5",
+/* ================== BUSINESS SETTINGS (EDIT) ================== */
+const BUSINESS = {
+  legalName: "Eventura",
+  addressLine1: "Surat, Gujarat, India",
+  gstin: "24ABCDE1234F1Z5", // <-- CHANGE TO YOUR REAL GSTIN
   state: "Gujarat",
   stateCode: "24",
-  address: "Surat, Gujarat, India",
-  bankName: "HDFC Bank",
-  accountNo: "XXXXXXXX1234",
-  ifsc: "HDFC0001234",
-  pan: "ABCDE1234F",
+  phone: "",
 };
 
-/* ================= FINANCE TYPES ================= */
-type TxType = "Income" | "Expense";
-type TxStatus = "Cleared" | "Pending";
+/* ================== TYPES ================== */
+type StockTxType = "IN" | "OUT" | "ADJUST";
 
-type FinanceTx = {
-  id: number;
-  date: string; // YYYY-MM-DD
-  type: TxType;
-  status: TxStatus;
-  category: string;
-  description: string;
-  amount: number; // numeric
-  fromAccount: string; // e.g., Bank/Cash/Receivable
-  toAccount: string; // e.g., Revenue/Payable/Vendor
-  createdBy: string;
-  relatedInvoiceId?: number;
-};
-
-type InvoiceStatus = "Draft" | "Sent" | "Paid" | "Cancelled";
-type GSTType = "CGST_SGST" | "IGST";
-
-type InvoiceItem = {
+type InventoryItem = {
   id: number;
   name: string;
+  category: string; // e.g. "Decor", "Lighting", "Sound", "Furniture"
+  sku: string;
+  unit: string; // e.g. "pcs", "set"
+  location: string; // e.g. "Warehouse A"
+  minStock: number;
+  stock: number;
+  purchaseCost: number; // per unit
+  notes: string;
+  createdAt: string;
+  createdBy: string;
+};
+
+type InventoryTx = {
+  id: number;
+  itemId: number;
+  type: StockTxType;
   qty: number;
-  rate: number;
+  note: string;
+  linkedEventName?: string;
+  createdAt: string;
+  createdBy: string;
+};
+
+type GSTType = "CGST_SGST" | "IGST";
+
+/** Invoice items are services/items you bill to client (not same as inventory item necessarily) */
+type InvoiceLine = {
+  id: number;
+  name: string;
+  hsnOrSac: string;
+  qty: number;
+  rate: number; // taxable value per unit
+  gstPercent: number; // 0 / 5 / 12 / 18 / 28
 };
 
 type Invoice = {
   id: number;
   invoiceNo: string;
-  date: string; // YYYY-MM-DD
-  dueDate: string; // YYYY-MM-DD
-  clientName: string;
+  invoiceDate: string; // YYYY-MM-DD
+  placeOfSupply: string; // state name
+  gstType: GSTType;
+  billToName: string;
+  billToAddress: string;
   clientGSTIN?: string;
   eventName?: string;
-  city?: string;
-  status: InvoiceStatus;
-  items: InvoiceItem[];
-  notes: string;
-  createdBy: string;
-  paidDate?: string;
 
-  // GST
-  placeOfSupply: string; // e.g. Gujarat / Maharashtra
-  hsn: string; // SAC/HSN
-  gstRate: number; // 18
-  gstType: GSTType;
+  lines: InvoiceLine[];
+
+  notes: string;
+  createdAt: string;
+  createdBy: string;
 };
 
-/* ================= HELPERS ================= */
-function todayISO() {
-  return new Date().toISOString().slice(0, 10);
+/* ================== HELPERS ================== */
+function safeNowISO() {
+  return new Date().toISOString();
 }
-
-function addDaysISO(baseISO: string, days: number) {
-  const d = new Date(baseISO);
-  d.setDate(d.getDate() + days);
+function yyyyMmDd(d: Date) {
   return d.toISOString().slice(0, 10);
 }
-
-function fmtINR(n: number) {
-  return n.toLocaleString("en-IN", { maximumFractionDigits: 0 });
+function n2(n: number) {
+  return Number.isFinite(n) ? n : 0;
 }
-
-function safeNum(v: any, fallback = 0): number {
-  const n = typeof v === "number" ? v : parseFloat(String(v ?? ""));
-  return Number.isFinite(n) ? n : fallback;
+function money(n: number) {
+  return Math.round(n2(n)).toLocaleString("en-IN");
 }
-
-function invSubTotal(inv: Invoice): number {
-  return (inv.items ?? []).reduce((sum, it) => sum + (it.qty || 0) * (it.rate || 0), 0);
+function getUserName(u: User | null) {
+  return u?.name ?? "System";
 }
-
-function calcGST(taxable: number, rate: number, type: GSTType) {
-  const gst = (taxable * rate) / 100;
-  if (type === "IGST") {
-    return { taxable, igst: gst, cgst: 0, sgst: 0, total: taxable + gst };
-  }
-  return { taxable, igst: 0, cgst: gst / 2, sgst: gst / 2, total: taxable + gst };
-}
-
-function detectGSTType(placeOfSupply: string) {
+function detectGSTType(placeOfSupply: string): GSTType {
   const pos = (placeOfSupply || "").trim().toLowerCase();
-  const sameState = pos === "gujarat" || pos.includes("gujarat");
-  return sameState ? ("CGST_SGST" as const) : ("IGST" as const);
+  const home = BUSINESS.state.trim().toLowerCase();
+  return pos && pos !== home ? "IGST" : "CGST_SGST";
 }
 
-function nextInvoiceNo(existing: Invoice[]) {
-  // EV-YYYY-0001
-  const year = new Date().getFullYear();
-  const prefix = `EV-${year}-`;
-  const nums = existing
-    .map((i) => i.invoiceNo)
-    .filter((no) => no.startsWith(prefix))
-    .map((no) => parseInt(no.replace(prefix, ""), 10))
-    .filter((n) => Number.isFinite(n));
-  const next = (nums.length ? Math.max(...nums) : 0) + 1;
-  return `${prefix}${String(next).padStart(4, "0")}`;
+function downloadText(filename: string, text: string) {
+  const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
 
-function amountInWordsSimpleINR(total: number) {
-  // Keep it simple & safe (no huge word lib)
-  return `Rupees ${fmtINR(Math.round(total))} only`;
-}
-
-/* ================= PAGE ================= */
-export default function FinancePage() {
+/* ================== PAGE ================== */
+export default function InventoryPage() {
   const [user, setUser] = useState<User | null>(null);
-  const [tx, setTx] = useState<FinanceTx[]>([]);
+
+  const [items, setItems] = useState<InventoryItem[]>([]);
+  const [tx, setTx] = useState<InventoryTx[]>([]);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
-  const [view, setView] = useState<"dashboard" | "transactions" | "invoices">("dashboard");
 
-  // filters
-  const [monthFilter, setMonthFilter] = useState<string>(() => todayISO().slice(0, 7)); // YYYY-MM
-  const [search, setSearch] = useState("");
+  const [tab, setTab] = useState<"items" | "stock" | "gst">("items");
 
-  // transaction form
-  const [txDraft, setTxDraft] = useState<Omit<FinanceTx, "id" | "createdBy">>({
-    date: todayISO(),
-    type: "Expense",
-    status: "Cleared",
-    category: "General",
-    description: "",
-    amount: 0,
-    fromAccount: "Bank",
-    toAccount: "Vendor",
-  });
-
-  // invoice form
-  const [invDraft, setInvDraft] = useState<Omit<Invoice, "id" | "invoiceNo" | "createdBy">>({
-    date: todayISO(),
-    dueDate: addDaysISO(todayISO(), 7),
-    clientName: "",
-    clientGSTIN: "",
-    eventName: "",
-    city: "",
-    status: "Draft",
-    items: [{ id: 1, name: "Event Planning & Management", qty: 1, rate: 100000 }],
-    notes: "",
-
-    placeOfSupply: "Gujarat",
-    hsn: "9983",
-    gstRate: 18,
-    gstType: "CGST_SGST",
-  });
-
-  // auth
+  /* ---------- AUTH ---------- */
   useEffect(() => {
     if (typeof window === "undefined") return;
+
     const raw = window.localStorage.getItem(USER_KEY);
     if (!raw) {
       window.location.href = "/login";
@@ -209,923 +145,984 @@ export default function FinancePage() {
     }
   }, []);
 
-  // load
+  /* ---------- LOAD STORAGE ---------- */
   useEffect(() => {
     if (typeof window === "undefined") return;
 
-    // tx
-    const rawTx = window.localStorage.getItem(FIN_TX_KEY);
-    if (rawTx) {
+    // Items
+    const rawItems = window.localStorage.getItem(INV_ITEMS_KEY);
+    if (rawItems) {
       try {
-        const parsed = JSON.parse(rawTx) as FinanceTx[];
-        setTx(Array.isArray(parsed) ? parsed : []);
+        setItems(JSON.parse(rawItems));
       } catch {
-        setTx([]);
+        setItems([]);
       }
     } else {
-      // seed
-      const seed: FinanceTx[] = [
+      // seed small
+      const seed: InventoryItem[] = [
         {
           id: Date.now(),
-          date: todayISO(),
-          type: "Income",
-          status: "Cleared",
-          category: "Revenue",
-          description: "Advance received - Patel Wedding",
-          amount: 250000,
-          fromAccount: "Bank",
-          toAccount: "Revenue",
-          createdBy: "System",
-        },
-        {
-          id: Date.now() + 1,
-          date: todayISO(),
-          type: "Expense",
-          status: "Cleared",
-          category: "Marketing",
-          description: "Instagram Ads",
-          amount: 12000,
-          fromAccount: "Bank",
-          toAccount: "Marketing",
+          name: "LED PAR Light",
+          category: "Lighting",
+          sku: "LGT-LED-PAR-001",
+          unit: "pcs",
+          location: "Warehouse A",
+          minStock: 10,
+          stock: 24,
+          purchaseCost: 1200,
+          notes: "Basic LED par for stage wash.",
+          createdAt: safeNowISO(),
           createdBy: "System",
         },
       ];
-      setTx(seed);
-      window.localStorage.setItem(FIN_TX_KEY, JSON.stringify(seed));
+      setItems(seed);
+      window.localStorage.setItem(INV_ITEMS_KEY, JSON.stringify(seed));
     }
 
-    // invoices
-    const rawInv = window.localStorage.getItem(FIN_INV_KEY);
+    // Transactions
+    const rawTx = window.localStorage.getItem(INV_TX_KEY);
+    if (rawTx) {
+      try {
+        setTx(JSON.parse(rawTx));
+      } catch {
+        setTx([]);
+      }
+    }
+
+    // Invoices
+    const rawInv = window.localStorage.getItem(INV_INVOICES_KEY);
     if (rawInv) {
       try {
-        const parsed = JSON.parse(rawInv) as Invoice[];
-        setInvoices(Array.isArray(parsed) ? parsed : []);
+        setInvoices(JSON.parse(rawInv));
       } catch {
         setInvoices([]);
       }
-    } else {
-      setInvoices([]);
-      window.localStorage.setItem(FIN_INV_KEY, JSON.stringify([]));
     }
   }, []);
 
-  // persist
+  /* ---------- SAVE STORAGE ---------- */
   useEffect(() => {
     if (typeof window === "undefined") return;
-    window.localStorage.setItem(FIN_TX_KEY, JSON.stringify(tx));
+    window.localStorage.setItem(INV_ITEMS_KEY, JSON.stringify(items));
+  }, [items]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(INV_TX_KEY, JSON.stringify(tx));
   }, [tx]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    window.localStorage.setItem(FIN_INV_KEY, JSON.stringify(invoices));
+    window.localStorage.setItem(INV_INVOICES_KEY, JSON.stringify(invoices));
   }, [invoices]);
-
-  const monthTx = useMemo(() => {
-    const m = monthFilter;
-    return tx.filter((t) => (t.date || "").startsWith(m));
-  }, [tx, monthFilter]);
-
-  const kpis = useMemo(() => {
-    const income = monthTx.filter((t) => t.type === "Income").reduce((s, t) => s + t.amount, 0);
-    const expense = monthTx.filter((t) => t.type === "Expense").reduce((s, t) => s + t.amount, 0);
-
-    const profit = income - expense;
-
-    // GST Payable estimate from posted tax transactions (category Tax)
-    const gstPayable = monthTx
-      .filter((t) => t.category === "Tax" && t.type === "Expense")
-      .reduce((s, t) => s + t.amount, 0);
-
-    // receivables: Sent invoices not paid
-    const receivable = invoices
-      .filter((i) => i.status === "Sent" || i.status === "Draft")
-      .reduce((s, i) => s + calcGST(invSubTotal(i), i.gstRate, i.gstType).total, 0);
-
-    // cash snapshot (super simple): cleared income - cleared expense
-    const clearedIncome = monthTx.filter((t) => t.type === "Income" && t.status === "Cleared").reduce((s, t) => s + t.amount, 0);
-    const clearedExpense = monthTx.filter((t) => t.type === "Expense" && t.status === "Cleared").reduce((s, t) => s + t.amount, 0);
-    const cashNet = clearedIncome - clearedExpense;
-
-    return { income, expense, profit, gstPayable, receivable, cashNet };
-  }, [monthTx, invoices]);
 
   if (!user) return null;
   const isCEO = user.role === "CEO";
 
-  // --- actions: transactions ---
-  function addTx(e: React.FormEvent) {
-    e.preventDefault();
-    if (!txDraft.date || !txDraft.description || !txDraft.category) {
-      alert("Date, category and description are required.");
-      return;
-    }
-    const amount = safeNum(txDraft.amount, 0);
-    if (amount <= 0) {
-      alert("Amount must be greater than 0.");
-      return;
-    }
-    const newTx: FinanceTx = {
-      id: Date.now(),
-      ...txDraft,
-      amount,
-     createdBy: user?.name ?? "System",
-    };
-    setTx((p) => [newTx, ...p]);
-    setTxDraft({
-      date: todayISO(),
-      type: "Expense",
-      status: "Cleared",
-      category: "General",
-      description: "",
-      amount: 0,
-      fromAccount: "Bank",
-      toAccount: "Vendor",
+  /* ================== ITEMS FORM ================== */
+  const [editingItemId, setEditingItemId] = useState<number | null>(null);
+  const [itemDraft, setItemDraft] = useState({
+    name: "",
+    category: "Decor",
+    sku: "",
+    unit: "pcs",
+    location: "Warehouse A",
+    minStock: 0,
+    stock: 0,
+    purchaseCost: 0,
+    notes: "",
+  });
+
+  function resetItemDraft() {
+    setEditingItemId(null);
+    setItemDraft({
+      name: "",
+      category: "Decor",
+      sku: "",
+      unit: "pcs",
+      location: "Warehouse A",
+      minStock: 0,
+      stock: 0,
+      purchaseCost: 0,
+      notes: "",
     });
   }
 
-  function deleteTx(id: number) {
-    if (!confirm("Delete this transaction?")) return;
-    setTx((p) => p.filter((t) => t.id !== id));
+  function saveItem(e: React.FormEvent) {
+    e.preventDefault();
+    if (!itemDraft.name.trim()) {
+      alert("Item name is required.");
+      return;
+    }
+
+    if (editingItemId == null) {
+      const newItem: InventoryItem = {
+        id: Date.now(),
+        name: itemDraft.name.trim(),
+        category: itemDraft.category.trim(),
+        sku: itemDraft.sku.trim(),
+        unit: itemDraft.unit.trim(),
+        location: itemDraft.location.trim(),
+        minStock: n2(itemDraft.minStock),
+        stock: n2(itemDraft.stock),
+        purchaseCost: n2(itemDraft.purchaseCost),
+        notes: itemDraft.notes.trim(),
+        createdAt: safeNowISO(),
+        createdBy: getUserName(user),
+      };
+      setItems((p) => [newItem, ...p]);
+    } else {
+      setItems((p) =>
+        p.map((it) =>
+          it.id === editingItemId
+            ? {
+                ...it,
+                name: itemDraft.name.trim(),
+                category: itemDraft.category.trim(),
+                sku: itemDraft.sku.trim(),
+                unit: itemDraft.unit.trim(),
+                location: itemDraft.location.trim(),
+                minStock: n2(itemDraft.minStock),
+                stock: n2(itemDraft.stock),
+                purchaseCost: n2(itemDraft.purchaseCost),
+                notes: itemDraft.notes.trim(),
+              }
+            : it
+        )
+      );
+    }
+    resetItemDraft();
   }
 
-  // --- actions: invoices ---
-  function createInvoice(e: React.FormEvent) {
-    e.preventDefault();
-    if (!invDraft.clientName.trim()) {
-      alert("Client name is required.");
-      return;
-    }
-    if (!invDraft.date) {
-      alert("Invoice date is required.");
-      return;
-    }
-    if (!invDraft.items?.length) {
-      alert("Add at least 1 item.");
-      return;
-    }
-    const cleanedItems = invDraft.items
-      .filter((it) => it.name.trim())
-      .map((it, idx) => ({
-        id: it.id || idx + 1,
-        name: it.name,
-        qty: Math.max(1, safeNum(it.qty, 1)),
-        rate: Math.max(0, safeNum(it.rate, 0)),
-      }));
+  function editItem(id: number) {
+    const it = items.find((x) => x.id === id);
+    if (!it) return;
+    setEditingItemId(it.id);
+    setItemDraft({
+      name: it.name,
+      category: it.category,
+      sku: it.sku,
+      unit: it.unit,
+      location: it.location,
+      minStock: it.minStock,
+      stock: it.stock,
+      purchaseCost: it.purchaseCost,
+      notes: it.notes,
+    });
+    setTab("items");
+  }
 
-    const inv: Invoice = {
+  function deleteItem(id: number) {
+    if (!confirm("Delete this inventory item?")) return;
+    setItems((p) => p.filter((x) => x.id !== id));
+    setTx((p) => p.filter((t) => t.itemId !== id));
+    if (editingItemId === id) resetItemDraft();
+  }
+
+  /* ================== STOCK MOVEMENT ================== */
+  const [stockDraft, setStockDraft] = useState({
+    itemId: 0,
+    type: "IN" as StockTxType,
+    qty: 1,
+    note: "",
+    linkedEventName: "",
+  });
+
+  useEffect(() => {
+    if (items.length && stockDraft.itemId === 0) {
+      setStockDraft((p) => ({ ...p, itemId: items[0].id }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items.length]);
+
+  function applyStockTx(e: React.FormEvent) {
+    e.preventDefault();
+    const item = items.find((x) => x.id === stockDraft.itemId);
+    if (!item) {
+      alert("Select a valid item.");
+      return;
+    }
+    const qty = Math.abs(n2(stockDraft.qty));
+    if (!qty || qty <= 0) {
+      alert("Quantity must be greater than 0.");
+      return;
+    }
+
+    let newStock = item.stock;
+    if (stockDraft.type === "IN") newStock = item.stock + qty;
+    if (stockDraft.type === "OUT") newStock = item.stock - qty;
+    if (stockDraft.type === "ADJUST") newStock = qty; // set to exact qty
+
+    if (newStock < 0) {
+      alert("Stock cannot go below 0.");
+      return;
+    }
+
+    const newTx: InventoryTx = {
       id: Date.now(),
-      invoiceNo: nextInvoiceNo(invoices),
-      ...invDraft,
-      clientGSTIN: (invDraft.clientGSTIN || "").trim() || undefined,
-      items: cleanedItems,
-      createdBy: user.name,
-      gstType: detectGSTType(invDraft.placeOfSupply),
+      itemId: item.id,
+      type: stockDraft.type,
+      qty,
+      note: stockDraft.note.trim(),
+      linkedEventName: stockDraft.linkedEventName.trim() || undefined,
+      createdAt: safeNowISO(),
+      createdBy: getUserName(user),
     };
 
-    setInvoices((p) => [inv, ...p]);
+    setItems((p) => p.map((x) => (x.id === item.id ? { ...x, stock: newStock } : x)));
+    setTx((p) => [newTx, ...p]);
+
+    setStockDraft((p) => ({
+      ...p,
+      qty: 1,
+      note: "",
+      linkedEventName: "",
+    }));
+  }
+
+  const lowStock = useMemo(() => {
+    return items
+      .filter((i) => i.stock <= i.minStock)
+      .sort((a, b) => a.stock - b.stock);
+  }, [items]);
+
+  /* ================== GST INVOICE ================== */
+  const [invoiceDraft, setInvoiceDraft] = useState<Invoice>(() => ({
+    id: 0,
+    invoiceNo: `EV-${new Date().getFullYear()}-${Math.floor(Math.random() * 9000 + 1000)}`,
+    invoiceDate: yyyyMmDd(new Date()),
+    placeOfSupply: BUSINESS.state,
+    gstType: "CGST_SGST",
+    billToName: "",
+    billToAddress: "",
+    clientGSTIN: "",
+    eventName: "",
+    lines: [
+      { id: 1, name: "Event Planning Service", hsnOrSac: "9983", qty: 1, rate: 50000, gstPercent: 18 },
+    ],
+    notes: "",
+    createdAt: "",
+    createdBy: "",
+  }));
+
+  useEffect(() => {
+    setInvoiceDraft((p) => ({
+      ...p,
+      gstType: detectGSTType(p.placeOfSupply),
+    }));
+  }, [invoiceDraft.placeOfSupply]);
+
+  function addInvoiceLine() {
+    setInvoiceDraft((p) => ({
+      ...p,
+      lines: [
+        ...p.lines,
+        {
+          id: Date.now(),
+          name: "",
+          hsnOrSac: "",
+          qty: 1,
+          rate: 0,
+          gstPercent: 18,
+        },
+      ],
+    }));
+  }
+
+  function removeInvoiceLine(id: number) {
+    setInvoiceDraft((p) => ({
+      ...p,
+      lines: p.lines.filter((l) => l.id !== id),
+    }));
+  }
+
+  function updateInvoiceLine(id: number, patch: Partial<InvoiceLine>) {
+    setInvoiceDraft((p) => ({
+      ...p,
+      lines: p.lines.map((l) => (l.id === id ? { ...l, ...patch } : l)),
+    }));
+  }
+
+  const invoiceTotals = useMemo(() => {
+    const taxable = invoiceDraft.lines.reduce((sum, l) => sum + n2(l.qty) * n2(l.rate), 0);
+    const gstTotal = invoiceDraft.lines.reduce((sum, l) => {
+      const lineTaxable = n2(l.qty) * n2(l.rate);
+      return sum + (lineTaxable * n2(l.gstPercent)) / 100;
+    }, 0);
+
+    const cgst = invoiceDraft.gstType === "CGST_SGST" ? gstTotal / 2 : 0;
+    const sgst = invoiceDraft.gstType === "CGST_SGST" ? gstTotal / 2 : 0;
+    const igst = invoiceDraft.gstType === "IGST" ? gstTotal : 0;
+
+    const grand = taxable + gstTotal;
+
+    return {
+      taxable,
+      gstTotal,
+      cgst,
+      sgst,
+      igst,
+      grand,
+    };
+  }, [invoiceDraft.lines, invoiceDraft.gstType]);
+
+  function saveInvoice(e: React.FormEvent) {
+    e.preventDefault();
+    if (!invoiceDraft.billToName.trim()) {
+      alert("Bill To name is required.");
+      return;
+    }
+    if (!invoiceDraft.billToAddress.trim()) {
+      alert("Bill To address is required.");
+      return;
+    }
+    if (invoiceDraft.lines.length === 0) {
+      alert("Add at least one invoice line.");
+      return;
+    }
+
+    const cleanedLines = invoiceDraft.lines.map((l) => ({
+      ...l,
+      name: l.name.trim() || "Service",
+      hsnOrSac: l.hsnOrSac.trim() || "",
+      qty: n2(l.qty) || 1,
+      rate: n2(l.rate) || 0,
+      gstPercent: n2(l.gstPercent) || 0,
+    }));
+
+    const newInvoice: Invoice = {
+      ...invoiceDraft,
+      id: Date.now(),
+      placeOfSupply: invoiceDraft.placeOfSupply.trim() || BUSINESS.state,
+      gstType: detectGSTType(invoiceDraft.placeOfSupply),
+      clientGSTIN: (invoiceDraft.clientGSTIN || "").trim() || undefined,
+      eventName: (invoiceDraft.eventName || "").trim() || undefined,
+      lines: cleanedLines,
+      createdAt: safeNowISO(),
+      createdBy: getUserName(user),
+    };
+
+    setInvoices((p) => [newInvoice, ...p]);
 
     // reset
-    setInvDraft({
-      date: todayISO(),
-      dueDate: addDaysISO(todayISO(), 7),
-      clientName: "",
+    setInvoiceDraft((p) => ({
+      ...p,
+      id: 0,
+      invoiceNo: `EV-${new Date().getFullYear()}-${Math.floor(Math.random() * 9000 + 1000)}`,
+      invoiceDate: yyyyMmDd(new Date()),
+      placeOfSupply: BUSINESS.state,
+      gstType: "CGST_SGST",
+      billToName: "",
+      billToAddress: "",
       clientGSTIN: "",
       eventName: "",
-      city: "",
-      status: "Draft",
-      items: [{ id: 1, name: "Event Planning & Management", qty: 1, rate: 100000 }],
+      lines: [{ id: Date.now(), name: "Event Planning Service", hsnOrSac: "9983", qty: 1, rate: 50000, gstPercent: 18 }],
       notes: "",
-      placeOfSupply: "Gujarat",
-      hsn: "9983",
-      gstRate: 18,
-      gstType: "CGST_SGST",
-    });
+      createdAt: "",
+      createdBy: "",
+    }));
 
-    setView("invoices");
-  }
-
-  function setInvoiceStatus(id: number, status: InvoiceStatus) {
-    setInvoices((p) => p.map((i) => (i.id === id ? { ...i, status } : i)));
+    alert("Invoice saved ✅ (stored locally)");
   }
 
   function deleteInvoice(id: number) {
     if (!confirm("Delete this invoice?")) return;
-    setInvoices((p) => p.filter((i) => i.id !== id));
+    setInvoices((p) => p.filter((x) => x.id !== id));
   }
 
-  function markInvoicePaid(id: number) {
-    const inv = invoices.find((i) => i.id === id);
-    if (!inv) return;
-
-    const paidDate = todayISO();
-    const sub = invSubTotal(inv);
-    const gst = calcGST(sub, inv.gstRate, inv.gstType);
-
-    // Revenue tx = TOTAL (taxable + GST)
-    const revenueTx: FinanceTx = {
-      id: Date.now(),
-      date: paidDate,
-      type: "Income",
-      status: "Cleared",
-      category: "Revenue",
-      description: `Invoice paid: ${inv.invoiceNo} - ${inv.clientName}`,
-      amount: gst.total,
-      fromAccount: "Bank",
-      toAccount: "Revenue",
-      createdBy: user.name,
-      relatedInvoiceId: inv.id,
-    };
-
-    // GST Payable postings (kept as Expense/Tax → Payable bucket, so you track liability)
-    const taxTx: FinanceTx[] = [];
-    if (inv.gstType === "IGST") {
-      taxTx.push({
-        id: Date.now() + 11,
-        date: paidDate,
-        type: "Expense",
-        status: "Cleared",
-        category: "Tax",
-        description: `IGST payable (${inv.gstRate}%) – ${inv.invoiceNo}`,
-        amount: gst.igst,
-        fromAccount: "Bank",
-        toAccount: "GST Payable",
-        createdBy: user.name,
-        relatedInvoiceId: inv.id,
-      });
-    } else {
-      taxTx.push(
-        {
-          id: Date.now() + 12,
-          date: paidDate,
-          type: "Expense",
-          status: "Cleared",
-          category: "Tax",
-          description: `CGST payable (${inv.gstRate / 2}%) – ${inv.invoiceNo}`,
-          amount: gst.cgst,
-          fromAccount: "Bank",
-          toAccount: "GST Payable",
-          createdBy: user.name,
-          relatedInvoiceId: inv.id,
-        },
-        {
-          id: Date.now() + 13,
-          date: paidDate,
-          type: "Expense",
-          status: "Cleared",
-          category: "Tax",
-          description: `SGST payable (${inv.gstRate / 2}%) – ${inv.invoiceNo}`,
-          amount: gst.sgst,
-          fromAccount: "Bank",
-          toAccount: "GST Payable",
-          createdBy: user.name,
-          relatedInvoiceId: inv.id,
-        }
-      );
-    }
-
-    setTx((p) => [revenueTx, ...taxTx, ...p]);
-    setInvoices((p) =>
-      p.map((i) => (i.id === id ? { ...i, status: "Paid", paidDate } : i))
-    );
-  }
-
-  // filtered tables
-  const txFiltered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    const list = monthTx.slice().sort((a, b) => (b.date || "").localeCompare(a.date || ""));
-    if (!q) return list;
-    return list.filter((t) => {
-      return (
-        (t.description || "").toLowerCase().includes(q) ||
-        (t.category || "").toLowerCase().includes(q) ||
-        (t.type || "").toLowerCase().includes(q) ||
-        (t.fromAccount || "").toLowerCase().includes(q) ||
-        (t.toAccount || "").toLowerCase().includes(q)
-      );
-    });
-  }, [monthTx, search]);
-
-  const invFiltered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    const list = invoices.slice().sort((a, b) => (b.date || "").localeCompare(a.date || ""));
-    if (!q) return list;
-    return list.filter((i) => {
-      const total = calcGST(invSubTotal(i), i.gstRate, i.gstType).total;
-      return (
-        (i.invoiceNo || "").toLowerCase().includes(q) ||
-        (i.clientName || "").toLowerCase().includes(q) ||
-        (i.eventName || "").toLowerCase().includes(q) ||
-        (i.city || "").toLowerCase().includes(q) ||
-        String(total).includes(q)
-      );
-    });
-  }, [invoices, search]);
-
-  const invPreviewTotals = useMemo(() => {
-    const sub = invDraft.items.reduce((s, it) => s + safeNum(it.qty, 1) * safeNum(it.rate, 0), 0);
-    const gstType = detectGSTType(invDraft.placeOfSupply);
-    return calcGST(sub, safeNum(invDraft.gstRate, 18), gstType);
-  }, [invDraft.items, invDraft.gstRate, invDraft.placeOfSupply]);
-
+  /* ================== UI ================== */
   return (
     <main className="eventura-os">
+      {/* Sidebar */}
       <aside className="eventura-sidebar">
-        <SidebarCore user={user} active="finance" />
+        <SidebarCore user={user} active="inventory" />
       </aside>
 
+      {/* Main */}
       <div className="eventura-main">
         <TopbarCore user={user} />
 
         <div className="eventura-content">
           <div className="eventura-header-row">
             <div>
-              <h1 className="eventura-page-title">Finance</h1>
+              <h1 className="eventura-page-title">Inventory & GST</h1>
               <p className="eventura-subtitle">
-                Smart, auto & GST-ready finance for Eventura OS.
+                Track assets + stock movement + create GST invoices (India format).
               </p>
             </div>
+
             <div className="eventura-chips-row">
               <button
                 type="button"
-                className={"eventura-tag " + (view === "dashboard" ? "eventura-tag-blue" : "eventura-tag-amber")}
-                onClick={() => setView("dashboard")}
+                className={"eventura-tag " + (tab === "items" ? "eventura-tag-blue" : "eventura-tag-amber")}
+                onClick={() => setTab("items")}
               >
-                Dashboard
+                Items
               </button>
               <button
                 type="button"
-                className={"eventura-tag " + (view === "transactions" ? "eventura-tag-blue" : "eventura-tag-amber")}
-                onClick={() => setView("transactions")}
+                className={"eventura-tag " + (tab === "stock" ? "eventura-tag-blue" : "eventura-tag-amber")}
+                onClick={() => setTab("stock")}
               >
-                Transactions
+                Stock & Log
               </button>
               <button
                 type="button"
-                className={"eventura-tag " + (view === "invoices" ? "eventura-tag-blue" : "eventura-tag-amber")}
-                onClick={() => setView("invoices")}
+                className={"eventura-tag " + (tab === "gst" ? "eventura-tag-blue" : "eventura-tag-amber")}
+                onClick={() => setTab("gst")}
               >
-                GST Invoices
+                GST Invoice
+              </button>
+
+              <button
+                type="button"
+                className="eventura-button-secondary"
+                onClick={() => {
+                  downloadText("eventura-inventory-items.json", JSON.stringify(items, null, 2));
+                }}
+              >
+                Export Items JSON
+              </button>
+
+              <button
+                type="button"
+                className="eventura-button-secondary"
+                onClick={() => {
+                  downloadText("eventura-gst-invoices.json", JSON.stringify(invoices, null, 2));
+                }}
+              >
+                Export Invoices JSON
               </button>
             </div>
           </div>
 
-          {/* Global controls */}
-          <section className="eventura-columns" style={{ marginTop: "0.8rem" }}>
-            <div className="eventura-panel">
-              <h2 className="eventura-panel-title">Filters</h2>
-              <div className="eventura-form-grid">
-                <div className="eventura-field">
-                  <label className="eventura-label">Month (YYYY-MM)</label>
-                  <input
-                    className="eventura-input"
-                    value={monthFilter}
-                    onChange={(e) => setMonthFilter(e.target.value)}
-                    placeholder="2025-12"
-                  />
-                </div>
-                <div className="eventura-field">
-                  <label className="eventura-label">Search</label>
-                  <input
-                    className="eventura-input"
-                    value={search}
-                    onChange={(e) => setSearch(e.target.value)}
-                    placeholder="Search invoices / transactions..."
-                  />
-                </div>
-              </div>
-              <p className="eventura-small-text" style={{ marginTop: "0.5rem" }}>
-                Tip: Use month like <b>2025-12</b> to view that month’s P&L & GST.
-              </p>
-            </div>
-
-            <div className="eventura-panel">
-              <h2 className="eventura-panel-title">Quick KPIs ({monthFilter})</h2>
-              <div className="eventura-kpi-row">
-                <div className="eventura-card">
-                  <div className="eventura-card-label">Income</div>
-                  <div className="eventura-card-value">₹{fmtINR(kpis.income)}</div>
-                  <div className="eventura-card-note">Cleared + pending included</div>
-                </div>
-                <div className="eventura-card">
-                  <div className="eventura-card-label">Expenses</div>
-                  <div className="eventura-card-value">₹{fmtINR(kpis.expense)}</div>
-                  <div className="eventura-card-note">Including vendor + ops</div>
-                </div>
-                <div className="eventura-card">
-                  <div className="eventura-card-label">Profit</div>
-                  <div className="eventura-card-value">₹{fmtINR(kpis.profit)}</div>
-                  <div className="eventura-card-note">Income − Expense</div>
-                </div>
-                <div className="eventura-card">
-                  <div className="eventura-card-label">GST Payable (est.)</div>
-                  <div className="eventura-card-value">₹{fmtINR(kpis.gstPayable)}</div>
-                  <div className="eventura-card-note">From posted tax lines</div>
-                </div>
-              </div>
-
-              <div className="eventura-kpi-row" style={{ marginTop: "0.6rem" }}>
-                <div className="eventura-card">
-                  <div className="eventura-card-label">Receivable (Open invoices)</div>
-                  <div className="eventura-card-value">₹{fmtINR(kpis.receivable)}</div>
-                  <div className="eventura-card-note">Draft/Sent totals</div>
-                </div>
-                <div className="eventura-card">
-                  <div className="eventura-card-label">Cash Net (Cleared)</div>
-                  <div className="eventura-card-value">₹{fmtINR(kpis.cashNet)}</div>
-                  <div className="eventura-card-note">Cleared income − cleared expense</div>
-                </div>
+          {/* LOW STOCK ALERT */}
+          {lowStock.length > 0 && (
+            <div className="eventura-panel" style={{ marginBottom: "1rem" }}>
+              <h2 className="eventura-panel-title">⚠ Low stock alerts</h2>
+              <div className="eventura-table-wrapper">
+                <table className="eventura-table">
+                  <thead>
+                    <tr>
+                      <th>Item</th>
+                      <th>Stock</th>
+                      <th>Min</th>
+                      <th>Location</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {lowStock.map((i) => (
+                      <tr key={i.id}>
+                        <td>
+                          <div className="eventura-list-title">{i.name}</div>
+                          <div className="eventura-list-sub">{i.category} · {i.sku}</div>
+                        </td>
+                        <td>
+                          <span className="eventura-tag eventura-tag-amber">{i.stock}</span>
+                        </td>
+                        <td>{i.minStock}</td>
+                        <td>{i.location}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             </div>
-          </section>
-
-          {/* DASHBOARD */}
-          {view === "dashboard" && (
-            <section className="eventura-columns" style={{ marginTop: "0.8rem" }}>
-              <div className="eventura-panel">
-                <h2 className="eventura-panel-title">Smart actions</h2>
-                <ul className="eventura-bullets">
-                  <li>Create GST invoices and mark them paid → auto posts revenue + tax payable.</li>
-                  <li>Use Transactions for vendor payments, marketing, salaries, rent, etc.</li>
-                  <li>Keep Place of Supply correct to auto-select IGST vs CGST/SGST.</li>
-                </ul>
-                <div className="eventura-actions" style={{ marginTop: "0.8rem" }}>
-                  <button className="eventura-button" onClick={() => setView("invoices")} type="button">
-                    + Create GST Invoice
-                  </button>
-                  <button className="eventura-button-secondary" onClick={() => setView("transactions")} type="button">
-                    + Add Transaction
-                  </button>
-                  {isCEO && (
-                    <Link className="eventura-button-secondary" href="/reports">
-                      Open Reports
-                    </Link>
-                  )}
-                </div>
-              </div>
-
-              <div className="eventura-panel">
-                <h2 className="eventura-panel-title">GST Snapshot ({monthFilter})</h2>
-                <div className="eventura-table-wrapper">
-                  <table className="eventura-table">
-                    <thead>
-                      <tr>
-                        <th>Type</th>
-                        <th>Amount (₹)</th>
-                        <th>Note</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <tr>
-                        <td>GST Payable (posted)</td>
-                        <td>₹{fmtINR(kpis.gstPayable)}</td>
-                        <td className="eventura-small-text">From Tax category lines</td>
-                      </tr>
-                      <tr>
-                        <td>Open Receivables</td>
-                        <td>₹{fmtINR(kpis.receivable)}</td>
-                        <td className="eventura-small-text">Draft/Sent invoices total (incl GST)</td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-                <p className="eventura-small-text" style={{ marginTop: "0.5rem" }}>
-                  Next upgrade (if you want): <b>GSTR-1 summary</b> + <b>HSN-wise</b> export.
-                </p>
-              </div>
-            </section>
           )}
 
-          {/* TRANSACTIONS */}
-          {view === "transactions" && (
-            <section className="eventura-columns" style={{ marginTop: "0.8rem" }}>
+          {tab === "items" && (
+            <div className="eventura-columns">
               <div className="eventura-panel">
-                <h2 className="eventura-panel-title">Add transaction</h2>
-                <form className="eventura-form" onSubmit={addTx}>
+                <h2 className="eventura-panel-title">{editingItemId ? "Edit item" : "Add item"}</h2>
+
+                <form className="eventura-form" onSubmit={saveItem}>
                   <div className="eventura-form-grid">
                     <div className="eventura-field">
-                      <label className="eventura-label">Date</label>
+                      <label className="eventura-label">Name</label>
                       <input
                         className="eventura-input"
-                        type="date"
-                        value={txDraft.date}
-                        onChange={(e) => setTxDraft((p) => ({ ...p, date: e.target.value }))}
+                        value={itemDraft.name}
+                        onChange={(e) => setItemDraft((p) => ({ ...p, name: e.target.value }))}
+                        placeholder="e.g. LED PAR Light"
                       />
                     </div>
-                    <div className="eventura-field">
-                      <label className="eventura-label">Type</label>
-                      <select
-                        className="eventura-input"
-                        value={txDraft.type}
-                        onChange={(e) => setTxDraft((p) => ({ ...p, type: e.target.value as TxType }))}
-                      >
-                        <option>Income</option>
-                        <option>Expense</option>
-                      </select>
-                    </div>
-                  </div>
 
-                  <div className="eventura-form-grid">
                     <div className="eventura-field">
                       <label className="eventura-label">Category</label>
                       <input
                         className="eventura-input"
-                        value={txDraft.category}
-                        onChange={(e) => setTxDraft((p) => ({ ...p, category: e.target.value }))}
-                        placeholder="Revenue / Vendor / Salaries / Rent / Marketing / Tax"
+                        value={itemDraft.category}
+                        onChange={(e) => setItemDraft((p) => ({ ...p, category: e.target.value }))}
+                        placeholder="Decor / Lighting / Sound..."
+                      />
+                    </div>
+                  </div>
+
+                  <div className="eventura-form-grid">
+                    <div className="eventura-field">
+                      <label className="eventura-label">SKU</label>
+                      <input
+                        className="eventura-input"
+                        value={itemDraft.sku}
+                        onChange={(e) => setItemDraft((p) => ({ ...p, sku: e.target.value }))}
+                        placeholder="Optional"
                       />
                     </div>
                     <div className="eventura-field">
-                      <label className="eventura-label">Status</label>
+                      <label className="eventura-label">Unit</label>
+                      <input
+                        className="eventura-input"
+                        value={itemDraft.unit}
+                        onChange={(e) => setItemDraft((p) => ({ ...p, unit: e.target.value }))}
+                        placeholder="pcs / set"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="eventura-form-grid">
+                    <div className="eventura-field">
+                      <label className="eventura-label">Location</label>
+                      <input
+                        className="eventura-input"
+                        value={itemDraft.location}
+                        onChange={(e) => setItemDraft((p) => ({ ...p, location: e.target.value }))}
+                        placeholder="Warehouse A"
+                      />
+                    </div>
+
+                    <div className="eventura-field">
+                      <label className="eventura-label">Min stock</label>
+                      <input
+                        className="eventura-input"
+                        type="number"
+                        value={itemDraft.minStock}
+                        onChange={(e) => setItemDraft((p) => ({ ...p, minStock: Number(e.target.value) }))}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="eventura-form-grid">
+                    <div className="eventura-field">
+                      <label className="eventura-label">Current stock</label>
+                      <input
+                        className="eventura-input"
+                        type="number"
+                        value={itemDraft.stock}
+                        onChange={(e) => setItemDraft((p) => ({ ...p, stock: Number(e.target.value) }))}
+                      />
+                    </div>
+                    <div className="eventura-field">
+                      <label className="eventura-label">Purchase cost (₹/unit)</label>
+                      <input
+                        className="eventura-input"
+                        type="number"
+                        value={itemDraft.purchaseCost}
+                        onChange={(e) => setItemDraft((p) => ({ ...p, purchaseCost: Number(e.target.value) }))}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="eventura-field" style={{ marginTop: "0.6rem" }}>
+                    <label className="eventura-label">Notes</label>
+                    <textarea
+                      className="eventura-textarea"
+                      value={itemDraft.notes}
+                      onChange={(e) => setItemDraft((p) => ({ ...p, notes: e.target.value }))}
+                      placeholder="Any notes..."
+                    />
+                  </div>
+
+                  <div className="eventura-actions">
+                    <button className="eventura-button" type="submit">
+                      {editingItemId ? "Update item" : "Save item"}
+                    </button>
+                    {editingItemId && (
+                      <button type="button" className="eventura-button-secondary" onClick={resetItemDraft}>
+                        Cancel
+                      </button>
+                    )}
+                  </div>
+                </form>
+              </div>
+
+              <div className="eventura-panel">
+                <h2 className="eventura-panel-title">Inventory list</h2>
+
+                <div className="eventura-table-wrapper">
+                  <table className="eventura-table">
+                    <thead>
+                      <tr>
+                        <th>Item</th>
+                        <th>Stock</th>
+                        <th>Min</th>
+                        <th>Cost</th>
+                        <th>Location</th>
+                        <th />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {items.map((it) => (
+                        <tr key={it.id}>
+                          <td>
+                            <div className="eventura-list-title">{it.name}</div>
+                            <div className="eventura-list-sub">{it.category} · {it.sku || "—"} · {it.unit}</div>
+                          </td>
+                          <td>
+                            <span className={"eventura-tag " + (it.stock <= it.minStock ? "eventura-tag-amber" : "eventura-tag-green")}>
+                              {it.stock}
+                            </span>
+                          </td>
+                          <td>{it.minStock}</td>
+                          <td>₹{money(it.purchaseCost)}</td>
+                          <td>{it.location}</td>
+                          <td style={{ whiteSpace: "nowrap" }}>
+                            <button className="eventura-tag eventura-tag-blue" type="button" onClick={() => editItem(it.id)}>
+                              Edit
+                            </button>{" "}
+                            <button className="eventura-tag eventura-tag-amber" type="button" onClick={() => deleteItem(it.id)}>
+                              Delete
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                      {items.length === 0 && (
+                        <tr>
+                          <td colSpan={6} style={{ color: "#9ca3af", fontSize: "0.85rem" }}>
+                            No inventory items yet.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+
+                <p className="eventura-small-text" style={{ marginTop: "0.6rem" }}>
+                  Created by: {getUserName(user)} · Role: {user.role}
+                </p>
+              </div>
+            </div>
+          )}
+
+          {tab === "stock" && (
+            <div className="eventura-columns">
+              <div className="eventura-panel">
+                <h2 className="eventura-panel-title">Stock movement</h2>
+
+                <form className="eventura-form" onSubmit={applyStockTx}>
+                  <div className="eventura-form-grid">
+                    <div className="eventura-field">
+                      <label className="eventura-label">Item</label>
                       <select
                         className="eventura-input"
-                        value={txDraft.status}
-                        onChange={(e) => setTxDraft((p) => ({ ...p, status: e.target.value as TxStatus }))}
+                        value={stockDraft.itemId}
+                        onChange={(e) => setStockDraft((p) => ({ ...p, itemId: Number(e.target.value) }))}
                       >
-                        <option>Cleared</option>
-                        <option>Pending</option>
+                        {items.map((it) => (
+                          <option key={it.id} value={it.id}>
+                            {it.name} (stock {it.stock})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="eventura-field">
+                      <label className="eventura-label">Type</label>
+                      <select
+                        className="eventura-input"
+                        value={stockDraft.type}
+                        onChange={(e) => setStockDraft((p) => ({ ...p, type: e.target.value as StockTxType }))}
+                      >
+                        <option value="IN">IN (Purchase / Return)</option>
+                        <option value="OUT">OUT (Event usage)</option>
+                        <option value="ADJUST">ADJUST (Set exact stock)</option>
                       </select>
                     </div>
                   </div>
 
                   <div className="eventura-form-grid">
                     <div className="eventura-field">
-                      <label className="eventura-label">Amount (₹)</label>
+                      <label className="eventura-label">Quantity</label>
                       <input
                         className="eventura-input"
                         type="number"
-                        value={txDraft.amount}
-                        onChange={(e) => setTxDraft((p) => ({ ...p, amount: safeNum(e.target.value, 0) }))}
+                        value={stockDraft.qty}
+                        onChange={(e) => setStockDraft((p) => ({ ...p, qty: Number(e.target.value) }))}
                       />
                     </div>
+
                     <div className="eventura-field">
-                      <label className="eventura-label">From</label>
+                      <label className="eventura-label">Linked Event (optional)</label>
                       <input
                         className="eventura-input"
-                        value={txDraft.fromAccount}
-                        onChange={(e) => setTxDraft((p) => ({ ...p, fromAccount: e.target.value }))}
-                        placeholder="Bank / Cash / Receivable"
+                        value={stockDraft.linkedEventName}
+                        onChange={(e) => setStockDraft((p) => ({ ...p, linkedEventName: e.target.value }))}
+                        placeholder="e.g. Patel Wedding Sangeet"
                       />
                     </div>
                   </div>
 
-                  <div className="eventura-form-grid">
-                    <div className="eventura-field">
-                      <label className="eventura-label">To</label>
-                      <input
-                        className="eventura-input"
-                        value={txDraft.toAccount}
-                        onChange={(e) => setTxDraft((p) => ({ ...p, toAccount: e.target.value }))}
-                        placeholder="Revenue / Vendor / GST Payable"
-                      />
-                    </div>
-                    <div className="eventura-field">
-                      <label className="eventura-label">Description</label>
-                      <input
-                        className="eventura-input"
-                        value={txDraft.description}
-                        onChange={(e) => setTxDraft((p) => ({ ...p, description: e.target.value }))}
-                        placeholder="e.g. Decor advance paid, Office rent, Lead payment..."
-                      />
-                    </div>
+                  <div className="eventura-field" style={{ marginTop: "0.5rem" }}>
+                    <label className="eventura-label">Note</label>
+                    <input
+                      className="eventura-input"
+                      value={stockDraft.note}
+                      onChange={(e) => setStockDraft((p) => ({ ...p, note: e.target.value }))}
+                      placeholder="Reason / vendor / damage / etc."
+                    />
                   </div>
 
                   <div className="eventura-actions" style={{ marginTop: "0.6rem" }}>
                     <button className="eventura-button" type="submit">
-                      Save transaction
+                      Apply stock update
                     </button>
                   </div>
                 </form>
               </div>
 
               <div className="eventura-panel">
-                <h2 className="eventura-panel-title">Transactions ({monthFilter})</h2>
+                <h2 className="eventura-panel-title">Stock transaction log</h2>
                 <div className="eventura-table-wrapper">
                   <table className="eventura-table">
                     <thead>
                       <tr>
                         <th>Date</th>
+                        <th>Item</th>
                         <th>Type</th>
-                        <th>Category</th>
-                        <th>Description</th>
-                        <th>Amount (₹)</th>
-                        <th>Status</th>
-                        <th />
+                        <th>Qty</th>
+                        <th>Event</th>
+                        <th>By</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {txFiltered.length === 0 ? (
-                        <tr>
-                          <td colSpan={7} className="eventura-small-text" style={{ color: "#9ca3af" }}>
-                            No transactions for this filter.
-                          </td>
-                        </tr>
-                      ) : (
-                        txFiltered.map((t) => (
+                      {tx.map((t) => {
+                        const it = items.find((x) => x.id === t.itemId);
+                        return (
                           <tr key={t.id}>
-                            <td>{t.date}</td>
+                            <td>{new Date(t.createdAt).toLocaleString("en-IN")}</td>
+                            <td>{it?.name ?? "Deleted item"}</td>
                             <td>
-                              <span className={"eventura-tag " + (t.type === "Income" ? "eventura-tag-green" : "eventura-tag-amber")}>
+                              <span className={"eventura-tag " + (t.type === "OUT" ? "eventura-tag-amber" : t.type === "IN" ? "eventura-tag-green" : "eventura-tag-blue")}>
                                 {t.type}
                               </span>
                             </td>
-                            <td>{t.category}</td>
-                            <td>
-                              <div className="eventura-list-title">{t.description}</div>
-                              <div className="eventura-list-sub">
-                                {t.fromAccount} → {t.toAccount}
-                                {t.relatedInvoiceId ? ` · Invoice# ${t.relatedInvoiceId}` : ""}
-                              </div>
-                            </td>
-                            <td>₹{fmtINR(t.amount)}</td>
-                            <td>{t.status}</td>
-                            <td>
-                              <button className="eventura-tag eventura-tag-amber" type="button" onClick={() => deleteTx(t.id)}>
-                                Delete
-                              </button>
-                            </td>
+                            <td>{t.qty}</td>
+                            <td>{t.linkedEventName ?? "—"}</td>
+                            <td>{t.createdBy}</td>
                           </tr>
-                        ))
+                        );
+                      })}
+                      {tx.length === 0 && (
+                        <tr>
+                          <td colSpan={6} style={{ color: "#9ca3af", fontSize: "0.85rem" }}>
+                            No stock transactions yet.
+                          </td>
+                        </tr>
                       )}
                     </tbody>
                   </table>
                 </div>
               </div>
-            </section>
+            </div>
           )}
 
-          {/* INVOICES (GST) */}
-          {view === "invoices" && (
-            <section className="eventura-columns" style={{ marginTop: "0.8rem" }}>
-              {/* Create GST invoice */}
+          {tab === "gst" && (
+            <div className="eventura-columns">
               <div className="eventura-panel">
                 <h2 className="eventura-panel-title">Create GST Invoice</h2>
-                <p className="eventura-small-text">
-                  Place of Supply decides tax type automatically: <b>Gujarat</b> → CGST/SGST, other state → IGST.
-                </p>
 
-                <form className="eventura-form" onSubmit={createInvoice}>
+                <form className="eventura-form" onSubmit={saveInvoice}>
                   <div className="eventura-form-grid">
                     <div className="eventura-field">
-                      <label className="eventura-label">Invoice date</label>
+                      <label className="eventura-label">Invoice No</label>
                       <input
                         className="eventura-input"
-                        type="date"
-                        value={invDraft.date}
-                        onChange={(e) => setInvDraft((p) => ({ ...p, date: e.target.value }))}
+                        value={invoiceDraft.invoiceNo}
+                        onChange={(e) => setInvoiceDraft((p) => ({ ...p, invoiceNo: e.target.value }))}
                       />
                     </div>
                     <div className="eventura-field">
-                      <label className="eventura-label">Due date</label>
+                      <label className="eventura-label">Invoice Date</label>
                       <input
                         className="eventura-input"
                         type="date"
-                        value={invDraft.dueDate}
-                        onChange={(e) => setInvDraft((p) => ({ ...p, dueDate: e.target.value }))}
+                        value={invoiceDraft.invoiceDate}
+                        onChange={(e) => setInvoiceDraft((p) => ({ ...p, invoiceDate: e.target.value }))}
                       />
                     </div>
                   </div>
 
                   <div className="eventura-form-grid">
                     <div className="eventura-field">
-                      <label className="eventura-label">Client name</label>
+                      <label className="eventura-label">Place of Supply (State)</label>
                       <input
                         className="eventura-input"
-                        value={invDraft.clientName}
-                        onChange={(e) => setInvDraft((p) => ({ ...p, clientName: e.target.value }))}
-                        placeholder="Client / Company"
+                        value={invoiceDraft.placeOfSupply}
+                        onChange={(e) => setInvoiceDraft((p) => ({ ...p, placeOfSupply: e.target.value }))}
+                        placeholder="Gujarat / Maharashtra / etc."
+                      />
+                    </div>
+                    <div className="eventura-field">
+                      <label className="eventura-label">GST Type</label>
+                      <input className="eventura-input" value={invoiceDraft.gstType} readOnly />
+                    </div>
+                  </div>
+
+                  <div className="eventura-form-grid">
+                    <div className="eventura-field">
+                      <label className="eventura-label">Bill To (Client Name)</label>
+                      <input
+                        className="eventura-input"
+                        value={invoiceDraft.billToName}
+                        onChange={(e) => setInvoiceDraft((p) => ({ ...p, billToName: e.target.value }))}
                       />
                     </div>
                     <div className="eventura-field">
                       <label className="eventura-label">Client GSTIN (optional)</label>
                       <input
                         className="eventura-input"
-                        value={invDraft.clientGSTIN || ""}
-                        onChange={(e) => setInvDraft((p) => ({ ...p, clientGSTIN: e.target.value }))}
-                        placeholder="For B2B invoices"
+                        value={invoiceDraft.clientGSTIN || ""}
+                        onChange={(e) => setInvoiceDraft((p) => ({ ...p, clientGSTIN: e.target.value }))}
                       />
                     </div>
                   </div>
 
-                  <div className="eventura-form-grid">
-                    <div className="eventura-field">
-                      <label className="eventura-label">Event name (optional)</label>
-                      <input
-                        className="eventura-input"
-                        value={invDraft.eventName || ""}
-                        onChange={(e) => setInvDraft((p) => ({ ...p, eventName: e.target.value }))}
-                        placeholder="Patel Wedding / Corporate Gala"
-                      />
-                    </div>
-                    <div className="eventura-field">
-                      <label className="eventura-label">City (optional)</label>
-                      <input
-                        className="eventura-input"
-                        value={invDraft.city || ""}
-                        onChange={(e) => setInvDraft((p) => ({ ...p, city: e.target.value }))}
-                        placeholder="Surat / Ahmedabad / Mumbai"
-                      />
-                    </div>
+                  <div className="eventura-field" style={{ marginTop: "0.5rem" }}>
+                    <label className="eventura-label">Bill To Address</label>
+                    <textarea
+                      className="eventura-textarea"
+                      value={invoiceDraft.billToAddress}
+                      onChange={(e) => setInvoiceDraft((p) => ({ ...p, billToAddress: e.target.value }))}
+                      placeholder="Client address"
+                    />
                   </div>
 
-                  <h3 className="eventura-subsection-title" style={{ marginTop: "1rem" }}>
-                    GST Details
-                  </h3>
-
-                  <div className="eventura-form-grid">
-                    <div className="eventura-field">
-                      <label className="eventura-label">Place of Supply</label>
-                      <input
-                        className="eventura-input"
-                        value={invDraft.placeOfSupply}
-                        onChange={(e) =>
-                          setInvDraft((p) => ({
-                            ...p,
-                            placeOfSupply: e.target.value,
-                            gstType: detectGSTType(e.target.value),
-                          }))
-                        }
-                        placeholder="Gujarat / Maharashtra / Rajasthan ..."
-                      />
-                      <div className="eventura-small-text" style={{ marginTop: "0.25rem" }}>
-                        Auto: <b>{detectGSTType(invDraft.placeOfSupply) === "IGST" ? "IGST" : "CGST + SGST"}</b>
-                      </div>
-                    </div>
-
-                    <div className="eventura-field">
-                      <label className="eventura-label">HSN / SAC</label>
-                      <input
-                        className="eventura-input"
-                        value={invDraft.hsn}
-                        onChange={(e) => setInvDraft((p) => ({ ...p, hsn: e.target.value }))}
-                        placeholder="9983"
-                      />
-                    </div>
+                  <div className="eventura-field" style={{ marginTop: "0.5rem" }}>
+                    <label className="eventura-label">Event Name (optional)</label>
+                    <input
+                      className="eventura-input"
+                      value={invoiceDraft.eventName || ""}
+                      onChange={(e) => setInvoiceDraft((p) => ({ ...p, eventName: e.target.value }))}
+                      placeholder="e.g. Patel Wedding Sangeet"
+                    />
                   </div>
 
-                  <div className="eventura-form-grid">
-                    <div className="eventura-field">
-                      <label className="eventura-label">GST %</label>
-                      <input
-                        className="eventura-input"
-                        type="number"
-                        value={invDraft.gstRate}
-                        onChange={(e) => setInvDraft((p) => ({ ...p, gstRate: safeNum(e.target.value, 18) }))}
-                      />
+                  <div style={{ marginTop: "0.8rem" }}>
+                    <div className="eventura-header-row">
+                      <h3 className="eventura-panel-title">Invoice lines</h3>
+                      <button type="button" className="eventura-button-secondary" onClick={addInvoiceLine}>
+                        + Add line
+                      </button>
                     </div>
-                    <div className="eventura-field">
-                      <label className="eventura-label">Status</label>
-                      <select
-                        className="eventura-input"
-                        value={invDraft.status}
-                        onChange={(e) => setInvDraft((p) => ({ ...p, status: e.target.value as InvoiceStatus }))}
-                      >
-                        <option>Draft</option>
-                        <option>Sent</option>
-                        <option>Paid</option>
-                        <option>Cancelled</option>
-                      </select>
-                    </div>
-                  </div>
 
-                  <h3 className="eventura-subsection-title" style={{ marginTop: "1rem" }}>
-                    Items
-                  </h3>
-
-                  <div className="eventura-table-wrapper">
-                    <table className="eventura-table">
-                      <thead>
-                        <tr>
-                          <th>Item</th>
-                          <th>Qty</th>
-                          <th>Rate</th>
-                          <th>Line Total</th>
-                          <th />
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {invDraft.items.map((it) => {
-                          const line = safeNum(it.qty, 1) * safeNum(it.rate, 0);
-                          return (
-                            <tr key={it.id}>
+                    <div className="eventura-table-wrapper">
+                      <table className="eventura-table">
+                        <thead>
+                          <tr>
+                            <th>Description</th>
+                            <th>HSN/SAC</th>
+                            <th>Qty</th>
+                            <th>Rate</th>
+                            <th>GST%</th>
+                            <th />
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {invoiceDraft.lines.map((l) => (
+                            <tr key={l.id}>
                               <td>
                                 <input
                                   className="eventura-input"
-                                  value={it.name}
-                                  onChange={(e) =>
-                                    setInvDraft((p) => ({
-                                      ...p,
-                                      items: p.items.map((x) => (x.id === it.id ? { ...x, name: e.target.value } : x)),
-                                    }))
-                                  }
-                                  placeholder="Event planning / Decor / Management fee..."
+                                  value={l.name}
+                                  onChange={(e) => updateInvoiceLine(l.id, { name: e.target.value })}
                                 />
                               </td>
-                              <td style={{ width: 90 }}>
+                              <td>
+                                <input
+                                  className="eventura-input"
+                                  value={l.hsnOrSac}
+                                  onChange={(e) => updateInvoiceLine(l.id, { hsnOrSac: e.target.value })}
+                                />
+                              </td>
+                              <td>
                                 <input
                                   className="eventura-input"
                                   type="number"
-                                  value={it.qty}
-                                  onChange={(e) =>
-                                    setInvDraft((p) => ({
-                                      ...p,
-                                      items: p.items.map((x) => (x.id === it.id ? { ...x, qty: safeNum(e.target.value, 1) } : x)),
-                                    }))
-                                  }
+                                  value={l.qty}
+                                  onChange={(e) => updateInvoiceLine(l.id, { qty: Number(e.target.value) })}
                                 />
                               </td>
-                              <td style={{ width: 140 }}>
+                              <td>
                                 <input
                                   className="eventura-input"
                                   type="number"
-                                  value={it.rate}
-                                  onChange={(e) =>
-                                    setInvDraft((p) => ({
-                                      ...p,
-                                      items: p.items.map((x) => (x.id === it.id ? { ...x, rate: safeNum(e.target.value, 0) } : x)),
-                                    }))
-                                  }
+                                  value={l.rate}
+                                  onChange={(e) => updateInvoiceLine(l.id, { rate: Number(e.target.value) })}
                                 />
                               </td>
-                              <td>₹{fmtINR(line)}</td>
+                              <td>
+                                <input
+                                  className="eventura-input"
+                                  type="number"
+                                  value={l.gstPercent}
+                                  onChange={(e) => updateInvoiceLine(l.id, { gstPercent: Number(e.target.value) })}
+                                />
+                              </td>
                               <td>
                                 <button
                                   type="button"
                                   className="eventura-tag eventura-tag-amber"
-                                  onClick={() =>
-                                    setInvDraft((p) => ({
-                                      ...p,
-                                      items: p.items.length === 1 ? p.items : p.items.filter((x) => x.id !== it.id),
-                                    }))
-                                  }
+                                  onClick={() => removeInvoiceLine(l.id)}
                                 >
                                   Remove
                                 </button>
                               </td>
                             </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
+                          ))}
+                          {invoiceDraft.lines.length === 0 && (
+                            <tr>
+                              <td colSpan={6} style={{ color: "#9ca3af", fontSize: "0.85rem" }}>
+                                Add invoice lines.
+                              </td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
 
-                  <div className="eventura-actions" style={{ marginTop: "0.6rem" }}>
-                    <button
-                      type="button"
-                      className="eventura-button-secondary"
-                      onClick={() =>
-                        setInvDraft((p) => ({
-                          ...p,
-                          items: [
-                            ...p.items,
-                            { id: Date.now(), name: "Service", qty: 1, rate: 0 },
-                          ],
-                        }))
-                      }
-                    >
-                      + Add item
-                    </button>
-                  </div>
-
-                  <div className="eventura-field" style={{ marginTop: "0.8rem" }}>
-                    <label className="eventura-label">Notes</label>
-                    <textarea
-                      className="eventura-textarea"
-                      value={invDraft.notes}
-                      onChange={(e) => setInvDraft((p) => ({ ...p, notes: e.target.value }))}
-                      placeholder="Payment terms, scope, etc..."
-                    />
-                  </div>
-
-                  {/* Preview totals */}
                   <div className="eventura-kpi-row" style={{ marginTop: "0.8rem" }}>
                     <div className="eventura-card">
                       <div className="eventura-card-label">Taxable</div>
-                      <div className="eventura-card-value">₹{fmtINR(invPreviewTotals.taxable)}</div>
+                      <div className="eventura-card-value">₹{money(invoiceTotals.taxable)}</div>
                     </div>
+
                     <div className="eventura-card">
-                      <div className="eventura-card-label">
-                        {invPreviewTotals.igst > 0 ? "IGST" : "CGST"}
-                      </div>
-                      <div className="eventura-card-value">₹{fmtINR(invPreviewTotals.igst > 0 ? invPreviewTotals.igst : invPreviewTotals.cgst)}</div>
+                      <div className="eventura-card-label">GST</div>
+                      <div className="eventura-card-value">₹{money(invoiceTotals.gstTotal)}</div>
                       <div className="eventura-card-note">
-                        Rate: {invDraft.gstRate}%
+                        {invoiceDraft.gstType === "IGST"
+                          ? `IGST: ₹${money(invoiceTotals.igst)}`
+                          : `CGST: ₹${money(invoiceTotals.cgst)} · SGST: ₹${money(invoiceTotals.sgst)}`}
                       </div>
                     </div>
-                    {invPreviewTotals.igst === 0 && (
-                      <div className="eventura-card">
-                        <div className="eventura-card-label">SGST</div>
-                        <div className="eventura-card-value">₹{fmtINR(invPreviewTotals.sgst)}</div>
-                        <div className="eventura-card-note">Half GST</div>
-                      </div>
-                    )}
+
                     <div className="eventura-card">
-                      <div className="eventura-card-label">Invoice Total</div>
-                      <div className="eventura-card-value">₹{fmtINR(invPreviewTotals.total)}</div>
-                      <div className="eventura-card-note">{amountInWordsSimpleINR(invPreviewTotals.total)}</div>
+                      <div className="eventura-card-label">Grand Total</div>
+                      <div className="eventura-card-value">₹{money(invoiceTotals.grand)}</div>
                     </div>
                   </div>
 
-                  <div className="eventura-actions" style={{ marginTop: "0.8rem" }}>
+                  <div className="eventura-field" style={{ marginTop: "0.7rem" }}>
+                    <label className="eventura-label">Notes</label>
+                    <textarea
+                      className="eventura-textarea"
+                      value={invoiceDraft.notes}
+                      onChange={(e) => setInvoiceDraft((p) => ({ ...p, notes: e.target.value }))}
+                      placeholder="Payment terms, bank details, etc."
+                    />
+                  </div>
+
+                  <div className="eventura-actions" style={{ marginTop: "0.7rem" }}>
                     <button type="submit" className="eventura-button">
                       Save GST Invoice
                     </button>
@@ -1133,135 +1130,73 @@ export default function FinancePage() {
                 </form>
               </div>
 
-              {/* Invoices list */}
               <div className="eventura-panel">
-                <h2 className="eventura-panel-title">Invoices</h2>
+                <h2 className="eventura-panel-title">Saved invoices</h2>
 
                 <div className="eventura-table-wrapper">
                   <table className="eventura-table">
                     <thead>
                       <tr>
-                        <th>Invoice</th>
+                        <th>No</th>
+                        <th>Date</th>
                         <th>Client</th>
                         <th>POS</th>
-                        <th>GST</th>
-                        <th>Total (₹)</th>
-                        <th>Status</th>
+                        <th>Total</th>
                         <th />
                       </tr>
                     </thead>
                     <tbody>
-                      {invFiltered.length === 0 ? (
+                      {invoices.map((inv) => {
+                        const taxable = inv.lines.reduce((s, l) => s + n2(l.qty) * n2(l.rate), 0);
+                        const gst = inv.lines.reduce((s, l) => s + (n2(l.qty) * n2(l.rate) * n2(l.gstPercent)) / 100, 0);
+                        const total = taxable + gst;
+
+                        return (
+                          <tr key={inv.id}>
+                            <td>
+                              <div className="eventura-list-title">{inv.invoiceNo}</div>
+                              <div className="eventura-list-sub">{inv.gstType}</div>
+                            </td>
+                            <td>{inv.invoiceDate}</td>
+                            <td>{inv.billToName}</td>
+                            <td>{inv.placeOfSupply}</td>
+                            <td>₹{money(total)}</td>
+                            <td>
+                              <button
+                                type="button"
+                                className="eventura-tag eventura-tag-amber"
+                                onClick={() => deleteInvoice(inv.id)}
+                              >
+                                Delete
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                      {invoices.length === 0 && (
                         <tr>
-                          <td colSpan={7} className="eventura-small-text" style={{ color: "#9ca3af" }}>
-                            No invoices yet. Create one on the left.
+                          <td colSpan={6} style={{ color: "#9ca3af", fontSize: "0.85rem" }}>
+                            No invoices saved yet.
                           </td>
                         </tr>
-                      ) : (
-                        invFiltered.map((i) => {
-                          const sub = invSubTotal(i);
-                          const gst = calcGST(sub, i.gstRate, i.gstType);
-                          return (
-                            <tr key={i.id}>
-                              <td>
-                                <div className="eventura-list-title">{i.invoiceNo}</div>
-                                <div className="eventura-list-sub">
-                                  {i.date} → Due {i.dueDate}
-                                  {i.paidDate ? ` · Paid ${i.paidDate}` : ""}
-                                </div>
-                              </td>
-                              <td>
-                                <div className="eventura-list-title">{i.clientName}</div>
-                                <div className="eventura-list-sub">
-                                  {i.clientGSTIN ? `GSTIN: ${i.clientGSTIN}` : "B2C"}
-                                  {i.eventName ? ` · ${i.eventName}` : ""}
-                                </div>
-                              </td>
-                              <td>{i.placeOfSupply}</td>
-                              <td>
-                                <div className="eventura-small-text">
-                                  {i.gstType === "IGST" ? (
-                                    <>IGST {i.gstRate}%</>
-                                  ) : (
-                                    <>CGST {i.gstRate / 2}% + SGST {i.gstRate / 2}%</>
-                                  )}
-                                  <br />
-                                  SAC/HSN: {i.hsn}
-                                </div>
-                              </td>
-                              <td>
-                                <div className="eventura-list-title">₹{fmtINR(gst.total)}</div>
-                                <div className="eventura-list-sub">
-                                  Taxable ₹{fmtINR(gst.taxable)}
-                                </div>
-                              </td>
-                              <td>
-                                <span
-                                  className={
-                                    "eventura-tag " +
-                                    (i.status === "Paid"
-                                      ? "eventura-tag-green"
-                                      : i.status === "Cancelled"
-                                      ? "eventura-tag-amber"
-                                      : "eventura-tag-blue")
-                                  }
-                                >
-                                  {i.status}
-                                </span>
-                              </td>
-                              <td style={{ whiteSpace: "nowrap" }}>
-                                <select
-                                  className="eventura-input"
-                                  value={i.status}
-                                  onChange={(e) => setInvoiceStatus(i.id, e.target.value as InvoiceStatus)}
-                                  style={{ width: 120, display: "inline-block", marginRight: 8 }}
-                                >
-                                  <option>Draft</option>
-                                  <option>Sent</option>
-                                  <option>Paid</option>
-                                  <option>Cancelled</option>
-                                </select>
-
-                                {i.status !== "Paid" && (
-                                  <button
-                                    type="button"
-                                    className="eventura-tag eventura-tag-green"
-                                    onClick={() => markInvoicePaid(i.id)}
-                                    style={{ marginRight: 8 }}
-                                  >
-                                    Mark Paid
-                                  </button>
-                                )}
-
-                                <button
-                                  type="button"
-                                  className="eventura-tag eventura-tag-amber"
-                                  onClick={() => deleteInvoice(i.id)}
-                                >
-                                  Delete
-                                </button>
-                              </td>
-                            </tr>
-                          );
-                        })
                       )}
                     </tbody>
                   </table>
                 </div>
 
-                <div className="eventura-panel" style={{ marginTop: "1rem" }}>
-                  <h2 className="eventura-panel-title">Company GST Profile</h2>
-                  <div className="eventura-small-text">
-                    <b>{COMPANY_GST.legalName}</b><br />
-                    GSTIN: {COMPANY_GST.gstin}<br />
-                    State: {COMPANY_GST.state} ({COMPANY_GST.stateCode})<br />
-                    Address: {COMPANY_GST.address}<br />
-                    Bank: {COMPANY_GST.bankName} · A/C: {COMPANY_GST.accountNo} · IFSC: {COMPANY_GST.ifsc}<br />
-                    PAN: {COMPANY_GST.pan}
-                  </div>
-                </div>
+                <p className="eventura-small-text" style={{ marginTop: "0.6rem" }}>
+                  Tip: Place of Supply ≠ Gujarat → IGST. Same state → CGST+SGST.
+                </p>
               </div>
-            </section>
+            </div>
+          )}
+
+          {!isCEO && (
+            <div className="eventura-panel" style={{ marginTop: "1rem" }}>
+              <p className="eventura-small-text">
+                Staff access note: You can manage items & stock. GST invoices are visible here too (you can later restrict via Settings).
+              </p>
+            </div>
           )}
         </div>
       </div>
@@ -1269,8 +1204,7 @@ export default function FinancePage() {
   );
 }
 
-/* ================= SHARED LAYOUT ================= */
-
+/* ================== SHARED LAYOUT ================== */
 function SidebarCore({ user, active }: { user: User; active: string }) {
   const isCEO = user.role === "CEO";
   return (
@@ -1291,13 +1225,15 @@ function SidebarCore({ user, active }: { user: User; active: string }) {
         <SidebarLink href="/vendors" label="Vendors" icon="🤝" active={active === "vendors"} />
         {isCEO && <SidebarLink href="/finance" label="Finance" icon="💰" active={active === "finance"} />}
         <SidebarLink href="/hr" label="HR & Team" icon="🧑‍💼" active={active === "hr"} />
-        <SidebarLink href="/inventory" label="Inventory & Assets" icon="📦" active={active === "inventory"} />
+        <SidebarLink href="/inventory" label="Inventory & GST" icon="📦" active={active === "inventory"} />
         {isCEO && <SidebarLink href="/reports" label="Reports & Analytics" icon="📈" active={active === "reports"} />}
         {isCEO && <SidebarLink href="/settings" label="Settings & Access" icon="⚙️" active={active === "settings"} />}
       </nav>
 
       <div className="eventura-sidebar-footer">
-        <div className="eventura-sidebar-role">Role: {user.role === "CEO" ? "CEO / Super Admin" : "Staff"}</div>
+        <div className="eventura-sidebar-role">
+          Role: {user.role === "CEO" ? "CEO / Super Admin" : "Staff"}
+        </div>
         <div className="eventura-sidebar-city">City: {user.city}</div>
       </div>
     </>
@@ -1311,12 +1247,10 @@ function TopbarCore({ user }: { user: User }) {
         <div className="eventura-topbar-location">📍 {user.city}, Gujarat</div>
       </div>
       <div className="eventura-topbar-center">
-        <input className="eventura-search" placeholder="Search finance..." disabled />
+        <input className="eventura-search" placeholder="Search inventory, invoices..." />
       </div>
       <div className="eventura-topbar-right">
-        <button className="eventura-topbar-icon" title="Notifications" type="button">
-          🔔
-        </button>
+        <button className="eventura-topbar-icon" title="Notifications">🔔</button>
         <div className="eventura-user-avatar" title={user.name}>
           {user.name.charAt(0).toUpperCase()}
         </div>
