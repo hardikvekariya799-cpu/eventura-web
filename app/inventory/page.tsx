@@ -328,7 +328,7 @@ export default function FinancePage() {
       id: Date.now(),
       ...txDraft,
       amount,
-      createdBy: user.name,
+     createdBy: user?.name ?? "System",
     };
     setTx((p) => [newTx, ...p]);
     setTxDraft({
