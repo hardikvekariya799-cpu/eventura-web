@@ -3,373 +3,235 @@
 import React, { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 
-/* ========= Auth ========= */
+/* ================= AUTH (Always ask password on open) ================= */
 
 type Role = "CEO" | "Staff";
 type User = { name: string; role: Role; city: string };
+
 const USER_KEY = "eventura-user";
 
-/* ========= Shared storage keys (CONNECT ALL TABS) =========
-   Use these same keys in each tab to keep everything synced.
-*/
+/**
+ * IMPORTANT:
+ * Put your password in Vercel env as:
+ * NEXT_PUBLIC_EVENTURA_APP_PASSWORD=yourpassword
+ *
+ * For local:
+ * create .env.local:
+ * NEXT_PUBLIC_EVENTURA_APP_PASSWORD=yourpassword
+ *
+ * NOTE: This is client-side password gating (good for internal tool MVP).
+ */
+const APP_PASSWORD =
+  process.env.NEXT_PUBLIC_EVENTURA_APP_PASSWORD || "eventura@123";
+
+/* ================= Local DB keys (safe reads) ================= */
+
 const DB_EVENTS = "eventura-events";
-const DB_CALENDAR = "eventura-calendar-events"; // same as your upgraded calendar
-const DB_LEADS = "eventura-leads";
-const DB_VENDORS = "eventura-vendors";
-const DB_HR_TEAM = "eventura-hr-team"; // same as upgraded HR
-const DB_FIN_TX = "eventura-finance-transactions";
-
-/* ========= Types ========= */
-
-type EventStatus = "Tentative" | "Confirmed" | "Completed" | "Cancelled";
-type EventType = "Wedding" | "Corporate" | "Social" | "Other";
+const DB_FIN = "eventura-finance-transactions";
+const DB_TASKS = "eventura-tasks"; // optional if you have tasks
+const DB_LEADS = "eventura-leads"; // optional if you have leads
 
 type EventItem = {
   id: number;
-  title: string;
   date: string; // YYYY-MM-DD
-  type: EventType;
-  status: EventStatus;
-  city: string;
+  title: string;
+  status?: string;
+  city?: string;
   budget?: number;
-};
-
-type CalendarEvent = {
-  id: number;
-  title: string;
-  client: string;
-  date: string; // YYYY-MM-DD
-  type: EventType;
-  status: EventStatus;
-  estBudget?: number;
-};
-
-type LeadStage = "New" | "Contacted" | "Visit Scheduled" | "Proposal Sent" | "Won" | "Lost";
-type LeadItem = {
-  id: number;
-  name: string;
-  phone?: string;
-  city: string;
-  stage: LeadStage;
-  estValue?: number;
-  createdAt: string; // ISO
-};
-
-type VendorCategory = "Decor" | "Catering" | "Sound" | "Lights" | "Venue" | "Photography" | "Logistics" | "Other";
-type VendorItem = {
-  id: number;
-  name: string;
-  category: VendorCategory;
-  city: string;
-  rating?: number; // 1–5
-  active: boolean;
-};
-
-type StaffRole =
-  | "Event Manager"
-  | "Decor Specialist"
-  | "Logistics"
-  | "Marketing"
-  | "Sales"
-  | "Accountant"
-  | "Operations";
-type StaffStatus = "Core" | "Freelancer" | "Trainee";
-type TeamMember = {
-  id: number;
-  name: string;
-  role: StaffRole;
-  city: string;
-  status: StaffStatus;
-  workload: number;
-  monthlySalary: number;
-  eventsThisMonth: number;
-  rating: number;
-  skills: string[];
 };
 
 type TxType = "Income" | "Expense";
 type FinanceTx = {
   id: number;
-  type: TxType;
   date: string; // YYYY-MM-DD
-  category: string;
+  type: TxType;
   amount: number;
   note?: string;
+  category?: string;
 };
 
-/* ========= small utils ========= */
+type TaskItem = {
+  id: number;
+  title: string;
+  status?: "Todo" | "Doing" | "Done";
+  dueDate?: string; // YYYY-MM-DD
+  assignee?: string;
+};
 
-function todayYYYYMMDD() {
-  const d = new Date();
-  const y = d.getFullYear();
-  const m = `${d.getMonth() + 1}`.padStart(2, "0");
-  const day = `${d.getDate()}`.padStart(2, "0");
-  return `${y}-${m}-${day}`;
-}
-function formatINR(v: number) {
-  return "₹" + (v || 0).toLocaleString("en-IN");
-}
-function safeParseArray<T>(raw: string | null, fallback: T[]) {
+type LeadItem = {
+  id: number;
+  name: string;
+  stage?: string;
+  budget?: number;
+  city?: string;
+};
+
+function safeParse<T>(raw: string | null): T | null {
+  if (!raw) return null;
   try {
-    if (!raw) return fallback;
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? (parsed as T[]) : fallback;
+    return JSON.parse(raw) as T;
   } catch {
-    return fallback;
+    return null;
   }
 }
-function nextId(items: { id: number }[]) {
-  return (items.reduce((m, x) => Math.max(m, x.id), 0) || 0) + 1;
+
+function fmtINR(n: number) {
+  try {
+    return "₹" + (n || 0).toLocaleString("en-IN");
+  } catch {
+    return "₹" + String(n || 0);
+  }
 }
 
-/* ========= Dashboard ========= */
+function todayISO() {
+  const d = new Date();
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function daysBetween(aISO: string, bISO: string) {
+  const a = new Date(aISO + "T00:00:00");
+  const b = new Date(bISO + "T00:00:00");
+  const diff = b.getTime() - a.getTime();
+  return Math.round(diff / (1000 * 60 * 60 * 24));
+}
+
+function tagColorByStatus(s?: string) {
+  const v = (s || "").toLowerCase();
+  if (v.includes("confirm")) return "eventura-tag-green";
+  if (v.includes("complete")) return "eventura-tag-blue";
+  if (v.includes("cancel")) return "eventura-tag-amber";
+  if (v.includes("tent")) return "eventura-tag-amber";
+  return "eventura-tag-blue";
+}
+
+/* ================= PAGE ================= */
 
 export default function DashboardPage() {
   const [user, setUser] = useState<User | null>(null);
 
-  // Connected datasets
+  // Password gate every time Dashboard loads
+  const [pwOpen, setPwOpen] = useState(true);
+  const [pw, setPw] = useState("");
+  const [pwError, setPwError] = useState("");
+
+  // Data
   const [events, setEvents] = useState<EventItem[]>([]);
-  const [calendar, setCalendar] = useState<CalendarEvent[]>([]);
+  const [fin, setFin] = useState<FinanceTx[]>([]);
+  const [tasks, setTasks] = useState<TaskItem[]>([]);
   const [leads, setLeads] = useState<LeadItem[]>([]);
-  const [vendors, setVendors] = useState<VendorItem[]>([]);
-  const [team, setTeam] = useState<TeamMember[]>([]);
-  const [tx, setTx] = useState<FinanceTx[]>([]);
 
-  // Quick add forms
-  const [qaEvent, setQaEvent] = useState({
-    title: "",
-    date: todayYYYYMMDD(),
-    type: "Wedding" as EventType,
-    status: "Tentative" as EventStatus,
-    city: "Surat",
-    budget: "",
-  });
-  const [qaLead, setQaLead] = useState({
-    name: "",
-    phone: "",
-    city: "Surat",
-    stage: "New" as LeadStage,
-    estValue: "",
-  });
-  const [qaVendor, setQaVendor] = useState({
-    name: "",
-    category: "Decor" as VendorCategory,
-    city: "Surat",
-    rating: "4.5",
-    active: true,
-  });
-  const [qaTx, setQaTx] = useState({
-    type: "Income" as TxType,
-    date: todayYYYYMMDD(),
-    category: "Booking",
-    amount: "",
-    note: "",
-  });
-
-  /* ===== Auth ===== */
   useEffect(() => {
     if (typeof window === "undefined") return;
+
+    // Force login check (redirect if not logged in)
     const raw = window.localStorage.getItem(USER_KEY);
-    if (!raw) {
+    const u = safeParse<User>(raw);
+    if (!u) {
       window.location.href = "/login";
       return;
     }
-    try {
-      setUser(JSON.parse(raw));
-    } catch {
-      window.localStorage.removeItem(USER_KEY);
-      window.location.href = "/login";
-    }
+    setUser(u);
+
+    // Load dashboard data (safe)
+    setEvents(safeParse<EventItem[]>(window.localStorage.getItem(DB_EVENTS)) || []);
+    setFin(safeParse<FinanceTx[]>(window.localStorage.getItem(DB_FIN)) || []);
+    setTasks(safeParse<TaskItem[]>(window.localStorage.getItem(DB_TASKS)) || []);
+    setLeads(safeParse<LeadItem[]>(window.localStorage.getItem(DB_LEADS)) || []);
+
+    // Always open password modal on load/refresh
+    setPwOpen(true);
+    setPw("");
+    setPwError("");
   }, []);
-
-  /* ===== Load connected data (single source of truth = localStorage) ===== */
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-
-    const loadedEvents = safeParseArray<EventItem>(localStorage.getItem(DB_EVENTS), []);
-    const loadedCal = safeParseArray<CalendarEvent>(localStorage.getItem(DB_CALENDAR), []);
-    const loadedLeads = safeParseArray<LeadItem>(localStorage.getItem(DB_LEADS), []);
-    const loadedVendors = safeParseArray<VendorItem>(localStorage.getItem(DB_VENDORS), []);
-    const loadedTeam = safeParseArray<TeamMember>(localStorage.getItem(DB_HR_TEAM), []);
-    const loadedTx = safeParseArray<FinanceTx>(localStorage.getItem(DB_FIN_TX), []);
-
-    setEvents(loadedEvents);
-    setCalendar(loadedCal);
-    setLeads(loadedLeads);
-    setVendors(loadedVendors);
-    setTeam(loadedTeam);
-    setTx(loadedTx);
-  }, []);
-
-  /* ===== Persist changes back to localStorage (so all tabs stay connected) ===== */
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    localStorage.setItem(DB_EVENTS, JSON.stringify(events));
-  }, [events]);
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    localStorage.setItem(DB_CALENDAR, JSON.stringify(calendar));
-  }, [calendar]);
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    localStorage.setItem(DB_LEADS, JSON.stringify(leads));
-  }, [leads]);
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    localStorage.setItem(DB_VENDORS, JSON.stringify(vendors));
-  }, [vendors]);
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    localStorage.setItem(DB_HR_TEAM, JSON.stringify(team));
-  }, [team]);
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    localStorage.setItem(DB_FIN_TX, JSON.stringify(tx));
-  }, [tx]);
-
-  /* ===== KPI calculations ===== */
-  const kpis = useMemo(() => {
-    const today = todayYYYYMMDD();
-
-    const upcomingEvents = events.filter((e) => e.date >= today && e.status !== "Cancelled");
-    const upcomingCal = calendar.filter((e) => e.date >= today && e.status !== "Cancelled");
-
-    const openLeads = leads.filter((l) => !["Won", "Lost"].includes(l.stage));
-    const wonLeads = leads.filter((l) => l.stage === "Won");
-    const activeVendors = vendors.filter((v) => v.active).length;
-
-    const core = team.filter((m) => m.status === "Core");
-    const avgWorkload =
-      core.reduce((s, m) => s + (m.workload || 0), 0) / (core.length || 1);
-
-    const monthSalary = core.reduce((s, m) => s + (m.monthlySalary || 0), 0);
-
-    const income = tx.filter((t) => t.type === "Income").reduce((s, t) => s + t.amount, 0);
-    const expense = tx.filter((t) => t.type === "Expense").reduce((s, t) => s + t.amount, 0);
-    const profit = income - expense;
-
-    return {
-      upcomingEvents: upcomingEvents.length,
-      upcomingCalendar: upcomingCal.length,
-      openLeads: openLeads.length,
-      wonLeads: wonLeads.length,
-      activeVendors,
-      coreCount: core.length,
-      avgWorkload: Math.round(avgWorkload || 0),
-      monthSalary,
-      income,
-      expense,
-      profit,
-    };
-  }, [events, calendar, leads, vendors, team, tx]);
-
-  /* ===== Recent lists (editable/removable) ===== */
-  const recentLeads = useMemo(
-    () =>
-      [...leads]
-        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-        .slice(0, 6),
-    [leads]
-  );
-
-  const upcomingCalendar = useMemo(
-    () => [...calendar].sort((a, b) => a.date.localeCompare(b.date)).slice(0, 6),
-    [calendar]
-  );
-
-  const recentTx = useMemo(
-    () => [...tx].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 6),
-    [tx]
-  );
 
   const isCEO = user?.role === "CEO";
+  const today = todayISO();
+
+  const dashboard = useMemo(() => {
+    // Upcoming events (next 14 days)
+    const upcoming = [...events]
+      .filter((e) => e.date >= today)
+      .sort((a, b) => (a.date > b.date ? 1 : -1))
+      .slice(0, 6);
+
+    // This month events (rough)
+    const ym = today.slice(0, 7);
+    const monthEvents = events.filter((e) => e.date.startsWith(ym));
+
+    // Finance month snapshot
+    const monthFin = fin.filter((t) => t.date?.startsWith(ym));
+    const income = monthFin
+      .filter((t) => t.type === "Income")
+      .reduce((s, t) => s + (Number(t.amount) || 0), 0);
+    const expense = monthFin
+      .filter((t) => t.type === "Expense")
+      .reduce((s, t) => s + (Number(t.amount) || 0), 0);
+    const net = income - expense;
+
+    // Overdue tasks
+    const overdue = tasks
+      .filter((t) => (t.status || "Todo") !== "Done" && t.dueDate && t.dueDate < today)
+      .sort((a, b) => ((a.dueDate || "") > (b.dueDate || "") ? 1 : -1))
+      .slice(0, 6);
+
+    // Leads quick
+    const activeLeads = leads.slice(0, 6);
+
+    // Health insights (auto)
+    const confirmed = monthEvents.filter((e) => (e.status || "").toLowerCase().includes("confirm")).length;
+    const tentative = monthEvents.filter((e) => (e.status || "").toLowerCase().includes("tent")).length;
+
+    const alerts: { type: "good" | "warn"; text: string }[] = [];
+
+    if (overdue.length > 0) {
+      alerts.push({ type: "warn", text: `You have ${overdue.length} overdue tasks. Fix today to avoid last-minute stress.` });
+    } else {
+      alerts.push({ type: "good", text: "No overdue tasks. Execution is on track." });
+    }
+
+    if (tentative > 0) {
+      alerts.push({ type: "warn", text: `${tentative} events are still Tentative this month. Confirm vendors + advance payments.` });
+    } else {
+      alerts.push({ type: "good", text: "Events pipeline looks stable — no tentative risks this month." });
+    }
+
+    if (net < 0) {
+      alerts.push({ type: "warn", text: "This month finance net is negative. Review expenses + vendor cost control." });
+    } else {
+      alerts.push({ type: "good", text: "Finance health looks positive this month." });
+    }
+
+    return {
+      upcoming,
+      monthEvents,
+      income,
+      expense,
+      net,
+      confirmed,
+      tentative,
+      overdue,
+      activeLeads,
+      alerts,
+    };
+  }, [events, fin, tasks, leads, today]);
+
   if (!user) return null;
 
-  /* ===== Actions (Add/Delete) ===== */
-  const addQuickEvent = () => {
-    if (!qaEvent.title.trim()) return alert("Event title required");
-    const budget = qaEvent.budget ? Number(qaEvent.budget) : undefined;
-    const item: EventItem = {
-      id: nextId(events),
-      title: qaEvent.title.trim(),
-      date: qaEvent.date,
-      type: qaEvent.type,
-      status: qaEvent.status,
-      city: qaEvent.city.trim() || "Surat",
-      budget: budget && !isNaN(budget) ? budget : undefined,
-    };
-    setEvents([...events, item]);
-    setQaEvent((p) => ({ ...p, title: "", budget: "" }));
-  };
-
-  const addQuickLead = () => {
-    if (!qaLead.name.trim()) return alert("Lead name required");
-    const est = qaLead.estValue ? Number(qaLead.estValue) : undefined;
-    const item: LeadItem = {
-      id: nextId(leads),
-      name: qaLead.name.trim(),
-      phone: qaLead.phone.trim() || undefined,
-      city: qaLead.city.trim() || "Surat",
-      stage: qaLead.stage,
-      estValue: est && !isNaN(est) ? est : undefined,
-      createdAt: new Date().toISOString(),
-    };
-    setLeads([item, ...leads]);
-    setQaLead((p) => ({ ...p, name: "", phone: "", estValue: "" }));
-  };
-
-  const addQuickVendor = () => {
-    if (!qaVendor.name.trim()) return alert("Vendor name required");
-    const r = qaVendor.rating ? Number(qaVendor.rating) : undefined;
-    const item: VendorItem = {
-      id: nextId(vendors),
-      name: qaVendor.name.trim(),
-      category: qaVendor.category,
-      city: qaVendor.city.trim() || "Surat",
-      rating: r && !isNaN(r) ? r : undefined,
-      active: qaVendor.active,
-    };
-    setVendors([item, ...vendors]);
-    setQaVendor((p) => ({ ...p, name: "" }));
-  };
-
-  const addQuickTx = () => {
-    const amount = Number(qaTx.amount);
-    if (!qaTx.category.trim()) return alert("Category required");
-    if (!qaTx.date) return alert("Date required");
-    if (!amount || isNaN(amount) || amount <= 0) return alert("Valid amount required");
-    const item: FinanceTx = {
-      id: nextId(tx),
-      type: qaTx.type,
-      date: qaTx.date,
-      category: qaTx.category.trim(),
-      amount,
-      note: qaTx.note.trim() || undefined,
-    };
-    setTx([item, ...tx]);
-    setQaTx((p) => ({ ...p, amount: "", note: "" }));
-  };
-
-  const remove = (kind: "event" | "calendar" | "lead" | "vendor" | "tx", id: number) => {
-    if (!window.confirm("Delete this item?")) return;
-    if (kind === "event") setEvents(events.filter((x) => x.id !== id));
-    if (kind === "calendar") setCalendar(calendar.filter((x) => x.id !== id));
-    if (kind === "lead") setLeads(leads.filter((x) => x.id !== id));
-    if (kind === "vendor") setVendors(vendors.filter((x) => x.id !== id));
-    if (kind === "tx") setTx(tx.filter((x) => x.id !== id));
-  };
-
-  const clearDatabase = (key: string, label: string) => {
-    if (!window.confirm(`Clear all data for: ${label}?`)) return;
-    localStorage.setItem(key, "[]");
-    // reload state from storage
-    if (key === DB_EVENTS) setEvents([]);
-    if (key === DB_CALENDAR) setCalendar([]);
-    if (key === DB_LEADS) setLeads([]);
-    if (key === DB_VENDORS) setVendors([]);
-    if (key === DB_FIN_TX) setTx([]);
-    // HR team clearing is powerful—only allow CEO
-    if (key === DB_HR_TEAM && isCEO) setTeam([]);
+  const unlock = () => {
+    const attempt = pw.trim();
+    if (!attempt) {
+      setPwError("Enter password");
+      return;
+    }
+    if (attempt !== APP_PASSWORD) {
+      setPwError("Wrong password");
+      return;
+    }
+    setPwError("");
+    setPwOpen(false);
   };
 
   return (
@@ -382,303 +244,261 @@ export default function DashboardPage() {
         <TopbarCore user={user} />
 
         <div className="eventura-content">
-          <div className="eventura-header-row">
+          {/* ===== Modern header ===== */}
+          <div className="eventura-header-row" style={{ alignItems: "flex-end" }}>
             <div>
-              <h1 className="eventura-page-title">CEO Dashboard</h1>
+              <h1 className="eventura-page-title">Eventura Command Center</h1>
               <p className="eventura-subtitle">
-                Connected control center — numbers update from Events, Calendar, Leads, Vendors, HR and Finance.
+                Modern ops dashboard: events, finance, leads, tasks — with smart alerts.
               </p>
             </div>
-            <div className="eventura-chips-row">
-              <Link className="eventura-tag eventura-tag-blue" href="/events">Open Events</Link>
-              <Link className="eventura-tag eventura-tag-blue" href="/calendar">Open Calendar</Link>
-              <Link className="eventura-tag eventura-tag-blue" href="/leads">Open Leads</Link>
-              <Link className="eventura-tag eventura-tag-blue" href="/vendors">Open Vendors</Link>
-              <Link className="eventura-tag eventura-tag-blue" href="/hr">Open HR</Link>
-              {isCEO && <Link className="eventura-tag eventura-tag-blue" href="/finance">Open Finance</Link>}
+
+            <div className="eventura-actions" style={{ display: "flex", gap: "0.6rem", flexWrap: "wrap" }}>
+              <Link href="/events" className="eventura-button">
+                ➕ Add Event
+              </Link>
+              <Link href="/calendar" className="eventura-button-secondary">
+                📅 Calendar
+              </Link>
+              <Link href="/leads" className="eventura-button-secondary">
+                👥 Leads
+              </Link>
+              {isCEO && (
+                <Link href="/finance" className="eventura-button-secondary">
+                  💰 Finance
+                </Link>
+              )}
             </div>
           </div>
 
-          {/* KPI CARDS */}
+          {/* ===== KPI Row ===== */}
           <section className="eventura-grid">
             <div className="eventura-card eventura-card-glow">
-              <p className="eventura-card-label">Upcoming Events</p>
-              <p className="eventura-card-value">{kpis.upcomingEvents}</p>
-              <p className="eventura-card-note">From Events tab (DB_EVENTS)</p>
-            </div>
-            <div className="eventura-card eventura-card-glow">
-              <p className="eventura-card-label">Calendar bookings</p>
-              <p className="eventura-card-value">{kpis.upcomingCalendar}</p>
-              <p className="eventura-card-note">From Calendar (DB_CALENDAR)</p>
-            </div>
-            <div className="eventura-card eventura-card-glow">
-              <p className="eventura-card-label">Open Leads</p>
-              <p className="eventura-card-value">{kpis.openLeads}</p>
-              <p className="eventura-card-note">Pipeline not Won/Lost</p>
-            </div>
-            <div className="eventura-card eventura-card-glow">
-              <p className="eventura-card-label">Active Vendors</p>
-              <p className="eventura-card-value">{kpis.activeVendors}</p>
-              <p className="eventura-card-note">Ready to book</p>
+              <p className="eventura-card-label">This month events</p>
+              <p className="eventura-card-value">{dashboard.monthEvents.length}</p>
+              <p className="eventura-card-note">
+                <span className="eventura-tag eventura-tag-green">{dashboard.confirmed} confirmed</span>{" "}
+                <span className="eventura-tag eventura-tag-amber">{dashboard.tentative} tentative</span>
+              </p>
             </div>
 
-            {isCEO && (
-              <>
-                <div className="eventura-card eventura-card-glow">
-                  <p className="eventura-card-label">Income</p>
-                  <p className="eventura-card-value">{formatINR(kpis.income)}</p>
-                  <p className="eventura-card-note">From Finance TX</p>
-                </div>
-                <div className="eventura-card eventura-card-glow">
-                  <p className="eventura-card-label">Expense</p>
-                  <p className="eventura-card-value">{formatINR(kpis.expense)}</p>
-                  <p className="eventura-card-note">From Finance TX</p>
-                </div>
-                <div className="eventura-card eventura-card-glow">
-                  <p className="eventura-card-label">Profit</p>
-                  <p className="eventura-card-value">{formatINR(kpis.profit)}</p>
-                  <p className="eventura-card-note">Income − Expense</p>
-                </div>
-                <div className="eventura-card eventura-card-glow">
-                  <p className="eventura-card-label">Core team</p>
-                  <p className="eventura-card-value">{kpis.coreCount}</p>
-                  <p className="eventura-card-note">Avg workload: {kpis.avgWorkload}%</p>
-                </div>
-              </>
-            )}
+            <div className="eventura-card eventura-card-glow">
+              <p className="eventura-card-label">Finance (month)</p>
+              <p className="eventura-card-value">{fmtINR(dashboard.net)}</p>
+              <p className="eventura-card-note">
+                Income: {fmtINR(dashboard.income)} · Expense: {fmtINR(dashboard.expense)}
+              </p>
+            </div>
+
+            <div className="eventura-card eventura-card-glow">
+              <p className="eventura-card-label">Overdue tasks</p>
+              <p className="eventura-card-value">{dashboard.overdue.length}</p>
+              <p className="eventura-card-note">
+                {dashboard.overdue.length ? "Action needed today." : "All good."}
+              </p>
+            </div>
+
+            <div className="eventura-card eventura-card-glow">
+              <p className="eventura-card-label">Active leads</p>
+              <p className="eventura-card-value">{leads.length}</p>
+              <p className="eventura-card-note">Keep follow-ups scheduled.</p>
+            </div>
           </section>
 
-          {/* MAIN: quick add + recent lists */}
+          {/* ===== Smart Alerts + Widgets ===== */}
           <section className="eventura-columns">
-            {/* QUICK ADD PANEL */}
-            <div className="eventura-panel" style={{ maxWidth: 420 }}>
-              <h2 className="eventura-panel-title">Quick Add (editable data)</h2>
+            {/* Left: smart alerts */}
+            <div className="eventura-panel">
+              <h2 className="eventura-panel-title">Smart Insights (Auto)</h2>
 
-              <h3 className="eventura-subsection-title">Add Event</h3>
-              <div className="eventura-form" style={{ display: "grid", gap: 8 }}>
-                <input className="eventura-search" placeholder="Event title"
-                  value={qaEvent.title} onChange={(e) => setQaEvent({ ...qaEvent, title: e.target.value })} />
-                <div style={{ display: "flex", gap: 8 }}>
-                  <input type="date" className="eventura-search" value={qaEvent.date}
-                    onChange={(e) => setQaEvent({ ...qaEvent, date: e.target.value })} />
-                  <input className="eventura-search" placeholder="City" value={qaEvent.city}
-                    onChange={(e) => setQaEvent({ ...qaEvent, city: e.target.value })} />
-                </div>
-                <div style={{ display: "flex", gap: 8 }}>
-                  <select className="eventura-search" value={qaEvent.type}
-                    onChange={(e) => setQaEvent({ ...qaEvent, type: e.target.value as EventType })}>
-                    <option>Wedding</option><option>Corporate</option><option>Social</option><option>Other</option>
-                  </select>
-                  <select className="eventura-search" value={qaEvent.status}
-                    onChange={(e) => setQaEvent({ ...qaEvent, status: e.target.value as EventStatus })}>
-                    <option>Tentative</option><option>Confirmed</option><option>Completed</option><option>Cancelled</option>
-                  </select>
-                </div>
-                <input className="eventura-search" placeholder="Budget (optional)"
-                  value={qaEvent.budget} onChange={(e) => setQaEvent({ ...qaEvent, budget: e.target.value })} />
-                <button className="eventura-button-secondary" type="button" onClick={addQuickEvent}>
-                  Add to Events DB
-                </button>
-              </div>
-
-              <h3 className="eventura-subsection-title" style={{ marginTop: 14 }}>Add Lead</h3>
-              <div className="eventura-form" style={{ display: "grid", gap: 8 }}>
-                <input className="eventura-search" placeholder="Lead name"
-                  value={qaLead.name} onChange={(e) => setQaLead({ ...qaLead, name: e.target.value })} />
-                <div style={{ display: "flex", gap: 8 }}>
-                  <input className="eventura-search" placeholder="Phone"
-                    value={qaLead.phone} onChange={(e) => setQaLead({ ...qaLead, phone: e.target.value })} />
-                  <input className="eventura-search" placeholder="City"
-                    value={qaLead.city} onChange={(e) => setQaLead({ ...qaLead, city: e.target.value })} />
-                </div>
-                <div style={{ display: "flex", gap: 8 }}>
-                  <select className="eventura-search" value={qaLead.stage}
-                    onChange={(e) => setQaLead({ ...qaLead, stage: e.target.value as LeadStage })}>
-                    <option>New</option><option>Contacted</option><option>Visit Scheduled</option>
-                    <option>Proposal Sent</option><option>Won</option><option>Lost</option>
-                  </select>
-                  <input className="eventura-search" placeholder="Est value (₹)"
-                    value={qaLead.estValue} onChange={(e) => setQaLead({ ...qaLead, estValue: e.target.value })} />
-                </div>
-                <button className="eventura-button-secondary" type="button" onClick={addQuickLead}>
-                  Add to Leads DB
-                </button>
-              </div>
-
-              <h3 className="eventura-subsection-title" style={{ marginTop: 14 }}>Add Vendor</h3>
-              <div className="eventura-form" style={{ display: "grid", gap: 8 }}>
-                <input className="eventura-search" placeholder="Vendor name"
-                  value={qaVendor.name} onChange={(e) => setQaVendor({ ...qaVendor, name: e.target.value })} />
-                <div style={{ display: "flex", gap: 8 }}>
-                  <select className="eventura-search" value={qaVendor.category}
-                    onChange={(e) => setQaVendor({ ...qaVendor, category: e.target.value as VendorCategory })}>
-                    <option>Decor</option><option>Catering</option><option>Sound</option><option>Lights</option>
-                    <option>Venue</option><option>Photography</option><option>Logistics</option><option>Other</option>
-                  </select>
-                  <input className="eventura-search" placeholder="City"
-                    value={qaVendor.city} onChange={(e) => setQaVendor({ ...qaVendor, city: e.target.value })} />
-                </div>
-                <div style={{ display: "flex", gap: 8 }}>
-                  <input className="eventura-search" placeholder="Rating (1-5)"
-                    value={qaVendor.rating} onChange={(e) => setQaVendor({ ...qaVendor, rating: e.target.value })} />
-                  <select className="eventura-search" value={qaVendor.active ? "Yes" : "No"}
-                    onChange={(e) => setQaVendor({ ...qaVendor, active: e.target.value === "Yes" })}>
-                    <option>Yes</option><option>No</option>
-                  </select>
-                </div>
-                <button className="eventura-button-secondary" type="button" onClick={addQuickVendor}>
-                  Add to Vendors DB
-                </button>
-              </div>
-
-              {isCEO && (
-                <>
-                  <h3 className="eventura-subsection-title" style={{ marginTop: 14 }}>Add Finance Transaction</h3>
-                  <div className="eventura-form" style={{ display: "grid", gap: 8 }}>
-                    <div style={{ display: "flex", gap: 8 }}>
-                      <select className="eventura-search" value={qaTx.type}
-                        onChange={(e) => setQaTx({ ...qaTx, type: e.target.value as TxType })}>
-                        <option>Income</option><option>Expense</option>
-                      </select>
-                      <input type="date" className="eventura-search" value={qaTx.date}
-                        onChange={(e) => setQaTx({ ...qaTx, date: e.target.value })} />
-                    </div>
-                    <input className="eventura-search" placeholder="Category (Booking, Vendor, Salary...)"
-                      value={qaTx.category} onChange={(e) => setQaTx({ ...qaTx, category: e.target.value })} />
-                    <input className="eventura-search" placeholder="Amount"
-                      value={qaTx.amount} onChange={(e) => setQaTx({ ...qaTx, amount: e.target.value })} />
-                    <input className="eventura-search" placeholder="Note (optional)"
-                      value={qaTx.note} onChange={(e) => setQaTx({ ...qaTx, note: e.target.value })} />
-                    <button className="eventura-button-secondary" type="button" onClick={addQuickTx}>
-                      Add to Finance DB
-                    </button>
+              <div className="eventura-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" }}>
+                {dashboard.alerts.map((a, idx) => (
+                  <div key={idx} className="eventura-card">
+                    <p className="eventura-card-label">
+                      {a.type === "warn" ? "⚠ Action" : "✅ Good"}
+                    </p>
+                    <p className="eventura-small-text" style={{ marginTop: 6 }}>
+                      {a.text}
+                    </p>
                   </div>
-                </>
-              )}
+                ))}
+              </div>
+
+              <div className="eventura-actions" style={{ marginTop: "0.8rem", display: "flex", gap: "0.6rem", flexWrap: "wrap" }}>
+                <Link className="eventura-button-secondary" href="/hr">
+                  🧑‍💼 HR & Team
+                </Link>
+                <Link className="eventura-button-secondary" href="/vendors">
+                  🤝 Vendors
+                </Link>
+                <Link className="eventura-button-secondary" href="/inventory">
+                  📦 Inventory
+                </Link>
+              </div>
             </div>
 
-            {/* RECENT / EDITABLE LISTS */}
+            {/* Right: quick overview cards */}
             <div className="eventura-panel">
-              <h2 className="eventura-panel-title">Recent + Editable Lists</h2>
+              <h2 className="eventura-panel-title">Upcoming (next)</h2>
 
-              <h3 className="eventura-subsection-title">Upcoming Calendar Bookings</h3>
               <div className="eventura-table-wrapper">
                 <table className="eventura-table">
                   <thead>
-                    <tr><th>Date</th><th>Title</th><th>Client</th><th>Status</th><th></th></tr>
+                    <tr>
+                      <th>Date</th>
+                      <th>Event</th>
+                      <th>Status</th>
+                      <th>In</th>
+                    </tr>
                   </thead>
                   <tbody>
-                    {upcomingCalendar.length === 0 && (
-                      <tr><td colSpan={5} className="eventura-small-text">No calendar bookings yet.</td></tr>
-                    )}
-                    {upcomingCalendar.map((c) => (
-                      <tr key={c.id}>
-                        <td>{c.date}</td>
-                        <td>{c.title}</td>
-                        <td>{c.client}</td>
-                        <td>{c.status}</td>
-                        <td>
-                          <button className="eventura-tag eventura-tag-amber" type="button"
-                            onClick={() => remove("calendar", c.id)}>Delete</button>
+                    {dashboard.upcoming.map((e) => {
+                      const d = daysBetween(today, e.date);
+                      return (
+                        <tr key={e.id}>
+                          <td>{e.date}</td>
+                          <td>
+                            <div className="eventura-list-title">{e.title}</div>
+                            <div className="eventura-list-sub">{e.city || user.city}</div>
+                          </td>
+                          <td>
+                            <span className={"eventura-tag " + tagColorByStatus(e.status)}>
+                              {e.status || "Planned"}
+                            </span>
+                          </td>
+                          <td>
+                            <span className="eventura-small-text">
+                              {d === 0 ? "Today" : d === 1 ? "Tomorrow" : `${d} days`}
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {dashboard.upcoming.length === 0 && (
+                      <tr>
+                        <td colSpan={4} style={{ color: "#9ca3af" }}>
+                          No upcoming events found. Add events to see planning view.
                         </td>
                       </tr>
-                    ))}
+                    )}
                   </tbody>
                 </table>
               </div>
 
-              <h3 className="eventura-subsection-title" style={{ marginTop: 14 }}>Recent Leads</h3>
+              <h3 className="eventura-subsection-title" style={{ marginTop: "0.9rem" }}>
+                Overdue Tasks
+              </h3>
+
               <div className="eventura-table-wrapper">
                 <table className="eventura-table">
                   <thead>
-                    <tr><th>Name</th><th>City</th><th>Stage</th><th>Value</th><th></th></tr>
+                    <tr>
+                      <th>Task</th>
+                      <th>Due</th>
+                      <th>Assignee</th>
+                    </tr>
                   </thead>
                   <tbody>
-                    {recentLeads.length === 0 && (
-                      <tr><td colSpan={5} className="eventura-small-text">No leads yet.</td></tr>
-                    )}
-                    {recentLeads.map((l) => (
-                      <tr key={l.id}>
+                    {dashboard.overdue.map((t) => (
+                      <tr key={t.id}>
                         <td>
-                          <div className="eventura-list-title">{l.name}</div>
-                          <div className="eventura-list-sub">{l.phone || ""}</div>
+                          <div className="eventura-list-title">{t.title}</div>
+                          <div className="eventura-list-sub">{t.status || "Todo"}</div>
                         </td>
-                        <td>{l.city}</td>
-                        <td>{l.stage}</td>
-                        <td>{l.estValue ? formatINR(l.estValue) : "-"}</td>
                         <td>
-                          <button className="eventura-tag eventura-tag-amber" type="button"
-                            onClick={() => remove("lead", l.id)}>Delete</button>
+                          <span className="eventura-tag eventura-tag-amber">{t.dueDate}</span>
                         </td>
+                        <td>{t.assignee || "—"}</td>
                       </tr>
                     ))}
+                    {dashboard.overdue.length === 0 && (
+                      <tr>
+                        <td colSpan={3} style={{ color: "#9ca3af" }}>
+                          No overdue tasks 🎉
+                        </td>
+                      </tr>
+                    )}
                   </tbody>
                 </table>
               </div>
 
-              {isCEO && (
-                <>
-                  <h3 className="eventura-subsection-title" style={{ marginTop: 14 }}>Recent Finance Transactions</h3>
-                  <div className="eventura-table-wrapper">
-                    <table className="eventura-table">
-                      <thead>
-                        <tr><th>Date</th><th>Type</th><th>Category</th><th>Amount</th><th></th></tr>
-                      </thead>
-                      <tbody>
-                        {recentTx.length === 0 && (
-                          <tr><td colSpan={5} className="eventura-small-text">No transactions yet.</td></tr>
-                        )}
-                        {recentTx.map((t) => (
-                          <tr key={t.id}>
-                            <td>{t.date}</td>
-                            <td>{t.type}</td>
-                            <td>{t.category}</td>
-                            <td>{formatINR(t.amount)}</td>
-                            <td>
-                              <button className="eventura-tag eventura-tag-amber" type="button"
-                                onClick={() => remove("tx", t.id)}>Delete</button>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </>
-              )}
-
-              <h3 className="eventura-subsection-title" style={{ marginTop: 14 }}>Data Controls</h3>
-              <div className="eventura-chips-row">
-                <button className="eventura-tag eventura-tag-amber" type="button"
-                  onClick={() => clearDatabase(DB_EVENTS, "Events")}>Clear Events</button>
-                <button className="eventura-tag eventura-tag-amber" type="button"
-                  onClick={() => clearDatabase(DB_CALENDAR, "Calendar")}>Clear Calendar</button>
-                <button className="eventura-tag eventura-tag-amber" type="button"
-                  onClick={() => clearDatabase(DB_LEADS, "Leads")}>Clear Leads</button>
-                <button className="eventura-tag eventura-tag-amber" type="button"
-                  onClick={() => clearDatabase(DB_VENDORS, "Vendors")}>Clear Vendors</button>
-                {isCEO && (
-                  <>
-                    <button className="eventura-tag eventura-tag-amber" type="button"
-                      onClick={() => clearDatabase(DB_FIN_TX, "Finance Transactions")}>Clear Finance</button>
-                    <button className="eventura-tag eventura-tag-amber" type="button"
-                      onClick={() => clearDatabase(DB_HR_TEAM, "HR Team")}>Clear HR Team</button>
-                  </>
-                )}
-              </div>
-
-              <p className="eventura-small-text" style={{ marginTop: 10 }}>
-                For full “connected tabs”, each tab must read/write the same DB keys shown at the top of this file.
-                If you paste your Events/Leads/Vendors/Finance pages, I’ll update them to use these same keys.
+              <p className="eventura-small-text" style={{ marginTop: "0.6rem" }}>
+                Tip: Add your real tasks DB into <b>{DB_TASKS}</b> to make this fully automated.
               </p>
             </div>
           </section>
         </div>
       </div>
+
+      {/* ===== Password modal (every open/refresh) ===== */}
+      {pwOpen && (
+        <div className="eventura-modal-overlay" role="dialog" aria-modal="true">
+          <div className="eventura-modal">
+            <div className="eventura-header-row">
+              <div>
+                <h2 className="eventura-panel-title" style={{ margin: 0 }}>
+                  🔐 Enter Password to Open Eventura OS
+                </h2>
+                <p className="eventura-small-text" style={{ marginTop: 6 }}>
+                  Security: password is required every time you open the dashboard.
+                </p>
+              </div>
+            </div>
+
+            <div className="eventura-grid" style={{ marginTop: "0.8rem" }}>
+              <div className="eventura-card" style={{ gridColumn: "1 / -1" }}>
+                <p className="eventura-card-label">Password</p>
+                <input
+                  className="eventura-search"
+                  type="password"
+                  value={pw}
+                  autoFocus
+                  onChange={(e) => {
+                    setPw(e.target.value);
+                    setPwError("");
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") unlock();
+                  }}
+                  placeholder="Enter Eventura password"
+                />
+                {pwError && (
+                  <div className="eventura-small-text" style={{ marginTop: 6, color: "#F97373" }}>
+                    {pwError}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="eventura-actions" style={{ marginTop: "0.9rem", display: "flex", gap: "0.6rem" }}>
+              <button className="eventura-button" onClick={unlock}>
+                ✅ Unlock
+              </button>
+              <button
+                className="eventura-button-secondary"
+                onClick={() => {
+                  // logout for safety
+                  if (typeof window !== "undefined") {
+                    window.localStorage.removeItem(USER_KEY);
+                    window.location.href = "/login";
+                  }
+                }}
+              >
+                🚪 Logout
+              </button>
+            </div>
+
+            <p className="eventura-small-text" style={{ marginTop: "0.8rem" }}>
+              Set password using env: <b>NEXT_PUBLIC_EVENTURA_APP_PASSWORD</b> (Vercel + .env.local)
+            </p>
+          </div>
+        </div>
+      )}
     </main>
   );
 }
 
-/* ========= Shared layout: sidebar + topbar ========= */
+/* ================= Shared layout: sidebar + topbar ================= */
 
 function SidebarCore({ user, active }: { user: User; active: string }) {
   const isCEO = user.role === "CEO";
@@ -718,7 +538,7 @@ function TopbarCore({ user }: { user: User }) {
         <div className="eventura-topbar-location">📍 {user.city}, Gujarat</div>
       </div>
       <div className="eventura-topbar-center">
-        <input className="eventura-search" placeholder="Search across Eventura OS..." />
+        <input className="eventura-search" placeholder="Search events, leads, vendors..." />
       </div>
       <div className="eventura-topbar-right">
         <button className="eventura-topbar-icon" title="Notifications">🔔</button>
