@@ -1,364 +1,171 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
-
-/**
- * EVENTURA OS — Secure Login (Modern)
- * - Forces login every app open (uses sessionStorage by default)
- * - Optional "Remember on this device" toggle (uses localStorage if enabled)
- * - Hardcoded demo credentials (change anytime)
- *
- * IMPORTANT: For real production, move credentials to env/database.
- */
+import React, { useMemo, useState } from "react";
 
 type Role = "CEO" | "Staff";
-type User = { name: string; role: Role; city: string; email: string };
 
-const SESSION_KEY = "eventura-session-user";
-const REMEMBER_KEY = "eventura-remember-user";
+const USER_KEY = "eventura-user";
+const SESSION_KEY = "eventura-session";
 
-/** ✅ CHANGE THESE PASSWORDS ANYTIME */
-const ACCOUNTS = [
-  {
-    role: "CEO" as const,
-    email: "ceo@eventura.com",
-    password: "Eventura@2026",
-    name: "Hardik Vekariya",
-    city: "Surat",
-  },
-  {
-    role: "Staff" as const,
-    email: "staff@eventura.com",
-    password: "Staff@2026",
-    name: "Eventura Staff",
-    city: "Surat",
-  },
-];
-
-function loadRemembered(): User | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const raw = window.localStorage.getItem(REMEMBER_KEY);
-    if (!raw) return null;
-    return JSON.parse(raw) as User;
-  } catch {
-    return null;
-  }
-}
-
+/**
+ * ✅ Login users:
+ * - ceo@eventura.com / Eventura@2026  -> CEO
+ * - staff@eventura.com / Eventura@2026 -> Staff
+ *
+ * ✅ Session storage = asks login again when browser is closed/reopened
+ * (sessionStorage clears on full close)
+ */
 export default function LoginPage() {
-  const [email, setEmail] = useState("");
+  const [email, setEmail] = useState("ceo@eventura.com");
   const [password, setPassword] = useState("");
-
   const [showPass, setShowPass] = useState(false);
-  const [remember, setRemember] = useState(false);
-
   const [error, setError] = useState<string | null>(null);
-  const [capsLock, setCapsLock] = useState(false);
+  const [busy, setBusy] = useState(false);
 
-  const hints = useMemo(
-    () => ({
-      ceo: `CEO → ceo@eventura.com / Eventura@2026`,
-      staff: `Staff → staff@eventura.com / Staff@2026`,
-    }),
+  const demo = useMemo(
+    () => [
+      { role: "CEO" as Role, email: "ceo@eventura.com", pass: "Eventura@2026" },
+      { role: "Staff" as Role, email: "staff@eventura.com", pass: "Eventura@2026" },
+    ],
     []
   );
 
-  // If user already has a session, redirect to dashboard
-  useEffect(() => {
-    if (typeof window === "undefined") return;
+  const validate = (e: string, p: string): { ok: boolean; role?: Role } => {
+    const normalized = e.trim().toLowerCase();
+    const match = demo.find((d) => d.email === normalized && d.pass === p);
+    if (!match) return { ok: false };
+    return { ok: true, role: match.role };
+  };
 
-    // session first (forces login again after browser close)
-    const sessionRaw = window.sessionStorage.getItem(SESSION_KEY);
-    if (sessionRaw) {
-      window.location.href = "/";
-      return;
-    }
-
-    // optional remember
-    const remembered = loadRemembered();
-    if (remembered) {
-      setEmail(remembered.email);
-      setRemember(true);
-    }
-  }, []);
-
-  const onSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
+  const login = async () => {
     setError(null);
+    setBusy(true);
 
-    const eClean = email.trim().toLowerCase();
-    const pClean = password;
+    try {
+      const res = validate(email, password);
+      if (!res.ok || !res.role) {
+        setError("Invalid email or password");
+        setBusy(false);
+        return;
+      }
 
-    const found = ACCOUNTS.find(
-      (a) => a.email.toLowerCase() === eClean && a.password === pClean
-    );
+      const user = {
+        name: res.role === "CEO" ? "Hardik Vekariya" : "Eventura Staff",
+        role: res.role,
+        city: "Surat",
+      };
 
-    if (!found) {
-      setError("Invalid email or password.");
-      return;
+      // ✅ Always ask login on new app open:
+      // Session storage token (clears on browser close)
+      sessionStorage.setItem(
+        SESSION_KEY,
+        JSON.stringify({ ok: true, ts: Date.now() })
+      );
+
+      // Keep user identity for pages (can be localStorage)
+      localStorage.setItem(USER_KEY, JSON.stringify(user));
+
+      window.location.href = "/";
+    } finally {
+      setBusy(false);
     }
-
-    const user: User = {
-      name: found.name,
-      role: found.role,
-      city: found.city,
-      email: found.email,
-    };
-
-    // ✅ Force login on every app open: sessionStorage
-    window.sessionStorage.setItem(SESSION_KEY, JSON.stringify(user));
-
-    // Optional remember email/user (NOT password)
-    if (remember) {
-      window.localStorage.setItem(REMEMBER_KEY, JSON.stringify(user));
-    } else {
-      window.localStorage.removeItem(REMEMBER_KEY);
-    }
-
-    window.location.href = "/";
   };
 
-  const shell: React.CSSProperties = {
-    minHeight: "100vh",
-    display: "grid",
-    placeItems: "center",
-    padding: 18,
-    background:
-      "radial-gradient(1200px 600px at 10% 10%, rgba(212,175,55,0.12), transparent 45%), radial-gradient(900px 500px at 90% 30%, rgba(139,92,246,0.12), transparent 55%), #070A12",
-    color: "#E5E7EB",
-    fontFamily:
-      'ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial',
-  };
-
-  const card: React.CSSProperties = {
-    width: "min(980px, 100%)",
-    borderRadius: 22,
-    border: "1px solid rgba(255,255,255,0.12)",
-    background: "rgba(10, 16, 32, 0.88)",
-    boxShadow: "0 30px 80px rgba(0,0,0,0.55)",
-    overflow: "hidden",
-    display: "grid",
-    gridTemplateColumns: "1.05fr 0.95fr",
-  };
-
-  const left: React.CSSProperties = {
-    padding: 26,
-    borderRight: "1px solid rgba(255,255,255,0.10)",
-    background:
-      "linear-gradient(180deg, rgba(212,175,55,0.08), rgba(139,92,246,0.06))",
-  };
-
-  const right: React.CSSProperties = {
-    padding: 26,
-    background:
-      "radial-gradient(700px 300px at 60% 20%, rgba(212,175,55,0.10), transparent 60%)",
-  };
-
-  const input: React.CSSProperties = {
-    width: "100%",
-    padding: "12px 12px",
-    borderRadius: 14,
-    border: "1px solid rgba(255,255,255,0.16)",
-    background: "rgba(0,0,0,0.25)",
-    color: "#F9FAFB",
-    outline: "none",
-    fontSize: 14,
-  };
-
-  const btn: React.CSSProperties = {
-    width: "100%",
-    padding: "12px 14px",
-    borderRadius: 14,
-    border: "1px solid rgba(255,255,255,0.16)",
-    background:
-      "linear-gradient(90deg, rgba(212,175,55,0.95), rgba(250,204,21,0.90))",
-    color: "#0B1020",
-    fontWeight: 800,
-    cursor: "pointer",
-  };
-
-  const btnGhost: React.CSSProperties = {
-    padding: "10px 12px",
-    borderRadius: 14,
-    border: "1px solid rgba(255,255,255,0.14)",
-    background: "rgba(255,255,255,0.06)",
-    color: "#E5E7EB",
-    cursor: "pointer",
-    fontSize: 13,
+  const fill = (role: Role) => {
+    const x = demo.find((d) => d.role === role)!;
+    setEmail(x.email);
+    setPassword(x.pass);
+    setError(null);
   };
 
   return (
-    <div style={shell}>
-      <div style={card}>
-        <div style={left}>
-          <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-            <div
-              style={{
-                height: 44,
-                width: 44,
-                borderRadius: 14,
-                display: "grid",
-                placeItems: "center",
-                background:
-                  "linear-gradient(135deg, rgba(212,175,55,0.9), rgba(139,92,246,0.7))",
-                color: "#0B1020",
-                fontWeight: 900,
-              }}
-            >
-              E
-            </div>
-            <div>
-              <div style={{ fontSize: 18, fontWeight: 900 }}>Eventura OS</div>
-              <div style={{ fontSize: 13, opacity: 0.8 }}>
-                Secure Login • Royal Ops Dashboard
-              </div>
-            </div>
+    <div className="min-h-screen w-full flex items-center justify-center px-4 bg-[#050816]">
+      <div className="w-full max-w-md rounded-3xl border border-white/10 bg-white/5 shadow-[0_25px_80px_rgba(0,0,0,0.55)] backdrop-blur-xl p-6">
+        <div className="flex items-center gap-3">
+          <div className="h-12 w-12 rounded-2xl bg-gradient-to-br from-yellow-300/30 to-purple-500/20 border border-white/10 flex items-center justify-center text-xl">
+            E
           </div>
-
-          <div style={{ marginTop: 18 }}>
-            <div style={{ fontSize: 26, fontWeight: 900, lineHeight: 1.1 }}>
-              Welcome back.
+          <div>
+            <div className="text-white text-xl font-semibold tracking-tight">
+              Eventura OS
             </div>
-            <div style={{ marginTop: 8, fontSize: 14, opacity: 0.85 }}>
-              Sign in to manage team capacity, events, vendors, leads, finance
-              and reports.
+            <div className="text-white/60 text-sm">
+              Secure Login · Royal Admin Panel
             </div>
-          </div>
-
-          <div
-            style={{
-              marginTop: 18,
-              padding: 14,
-              borderRadius: 16,
-              border: "1px solid rgba(255,255,255,0.12)",
-              background: "rgba(0,0,0,0.22)",
-            }}
-          >
-            <div style={{ fontWeight: 800, marginBottom: 8 }}>
-              Demo Credentials
-            </div>
-            <div style={{ fontSize: 13, opacity: 0.9 }}>{hints.ceo}</div>
-            <div style={{ fontSize: 13, opacity: 0.9, marginTop: 6 }}>
-              {hints.staff}
-            </div>
-            <div style={{ marginTop: 10, fontSize: 12, opacity: 0.75 }}>
-              Tip: You can change passwords inside <b>ACCOUNTS</b> in this file.
-            </div>
-          </div>
-
-          <div style={{ marginTop: 18, fontSize: 12, opacity: 0.75 }}>
-            Security mode: <b>Session login</b> (asks password again after you
-            close the browser). Optional “Remember” only saves email.
           </div>
         </div>
 
-        <div style={right}>
-          <form onSubmit={onSubmit}>
-            <div style={{ fontSize: 18, fontWeight: 900 }}>Sign in</div>
-            <div style={{ fontSize: 13, opacity: 0.8, marginTop: 6 }}>
-              Enter your Eventura credentials
-            </div>
+        <div className="mt-6 space-y-3">
+          <div>
+            <label className="text-white/70 text-sm">Email</label>
+            <input
+              className="mt-1 w-full rounded-2xl bg-black/30 border border-white/10 text-white px-4 py-3 outline-none focus:border-yellow-300/40"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="ceo@eventura.com"
+              autoComplete="username"
+            />
+          </div>
 
-            <div style={{ marginTop: 16 }}>
-              <div style={{ fontSize: 13, opacity: 0.85, marginBottom: 6 }}>
-                Email
-              </div>
+          <div>
+            <label className="text-white/70 text-sm">Password</label>
+            <div className="mt-1 flex items-center gap-2">
               <input
-                style={input}
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="ceo@eventura.com"
-                autoComplete="username"
-              />
-            </div>
-
-            <div style={{ marginTop: 14 }}>
-              <div style={{ fontSize: 13, opacity: 0.85, marginBottom: 6 }}>
-                Password
-              </div>
-
-              <div style={{ display: "flex", gap: 10 }}>
-                <input
-                  style={input}
-                  type={showPass ? "text" : "password"}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  onKeyUp={(e) => setCapsLock((e as any).getModifierState?.("CapsLock") || false)}
-                  placeholder="••••••••"
-                  autoComplete="current-password"
-                />
-                <button
-                  type="button"
-                  style={btnGhost}
-                  onClick={() => setShowPass((s) => !s)}
-                >
-                  {showPass ? "Hide" : "Show"}
-                </button>
-              </div>
-
-              {capsLock && (
-                <div style={{ marginTop: 6, fontSize: 12, opacity: 0.85 }}>
-                  ⚠ Caps Lock is ON
-                </div>
-              )}
-            </div>
-
-            <div
-              style={{
-                marginTop: 12,
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                gap: 10,
-                flexWrap: "wrap",
-              }}
-            >
-              <label style={{ display: "flex", gap: 10, alignItems: "center", fontSize: 13, opacity: 0.9 }}>
-                <input
-                  type="checkbox"
-                  checked={remember}
-                  onChange={(e) => setRemember(e.target.checked)}
-                />
-                Remember email on this device
-              </label>
-
-              <button
-                type="button"
-                style={btnGhost}
-                onClick={() => {
-                  setEmail("ceo@eventura.com");
-                  setPassword("Eventura@2026");
+                className="w-full rounded-2xl bg-black/30 border border-white/10 text-white px-4 py-3 outline-none focus:border-yellow-300/40"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="Enter password"
+                type={showPass ? "text" : "password"}
+                autoComplete="current-password"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") login();
                 }}
+              />
+              <button
+                className="rounded-2xl px-3 py-3 bg-white/5 border border-white/10 text-white/80 hover:text-white"
+                onClick={() => setShowPass((s) => !s)}
+                type="button"
+                title="Show/Hide"
               >
-                Autofill CEO
+                {showPass ? "🙈" : "👁️"}
               </button>
             </div>
+          </div>
 
-            {error && (
-              <div
-                style={{
-                  marginTop: 12,
-                  padding: 10,
-                  borderRadius: 14,
-                  border: "1px solid rgba(248,113,113,0.35)",
-                  background: "rgba(248,113,113,0.12)",
-                  color: "#FCA5A5",
-                  fontSize: 13,
-                }}
-              >
-                {error}
-              </div>
-            )}
-
-            <button style={btn} type="submit" onClick={() => setError(null)}>
-              Login
-            </button>
-
-            <div style={{ marginTop: 12, fontSize: 12, opacity: 0.75 }}>
-              Need logout? Go to Dashboard and click <b>Logout</b>.
+          {error && (
+            <div className="rounded-2xl bg-red-500/10 border border-red-400/20 text-red-200 text-sm px-4 py-3">
+              {error}
             </div>
-          </form>
+          )}
+
+          <button
+            disabled={busy}
+            onClick={login}
+            className="mt-2 w-full rounded-2xl bg-gradient-to-r from-yellow-300/35 to-purple-500/25 border border-white/10 text-white font-semibold py-3 hover:brightness-110 disabled:opacity-60"
+          >
+            {busy ? "Logging in..." : "Login"}
+          </button>
+
+          <div className="mt-4 grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => fill("CEO")}
+              className="rounded-2xl bg-white/5 border border-white/10 text-white/80 hover:text-white px-3 py-2 text-sm"
+            >
+              Use CEO Demo
+            </button>
+            <button
+              type="button"
+              onClick={() => fill("Staff")}
+              className="rounded-2xl bg-white/5 border border-white/10 text-white/80 hover:text-white px-3 py-2 text-sm"
+            >
+              Use Staff Demo
+            </button>
+          </div>
+
+          <div className="text-white/50 text-xs mt-3 leading-relaxed">
+            Tip: Closing the browser will require login again (secure mode).
+          </div>
         </div>
       </div>
     </div>
