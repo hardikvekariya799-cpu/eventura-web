@@ -3,36 +3,26 @@
 import React, { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 
-/* ===================== AUTH / KEYS ===================== */
+/* ===================== STORAGE KEYS ===================== */
+const USER_KEY = "eventura-user";
+const EVENTS_KEY = "eventura-events";
+const FIN_KEY = "eventura-finance-transactions";
 
+/* ===================== AUTH TYPES ===================== */
 type Role = "CEO" | "Staff";
 type User = { name: string; role: Role; city: string };
 
-const USER_KEY = "eventura-user";
-const EVENTS_KEY = "eventura-events";
-const FIN_TX_KEY = "eventura-finance-transactions";
-
-/* ===================== TYPES ===================== */
-
-type EventStatus =
-  | "New Lead"
-  | "Proposal Sent"
-  | "Negotiation"
-  | "Confirmed"
-  | "Planning"
-  | "In Execution"
-  | "Completed"
-  | "Cancelled";
+/* ===================== EVENTS TYPES ===================== */
+type EventPhase = "Not Started" | "Planning" | "In Progress" | "Completed" | "Cancelled";
 
 type EventType = "Wedding" | "Corporate" | "Party" | "Festival" | "Other";
 
 type VendorStatus = "Planned" | "Advance Paid" | "Paid" | "Cancelled";
-
 type VendorAssignment = {
   id: number;
   name: string;
   category: string;
-  amount: string; // store raw as string
+  amount: string; // string input
   status: VendorStatus;
 };
 
@@ -44,22 +34,6 @@ type IssueItem = {
   createdAt: string;
 };
 
-type TrackStage = "Not started" | "In planning" | "In execution" | "Completed" | "Cancelled";
-
-type ActivityItem = {
-  id: number;
-  at: string; // ISO
-  by: string;
-  action: string;
-};
-
-type ChecklistItem = {
-  id: number;
-  text: string;
-  done: boolean;
-  phase: "Planning" | "Execution";
-};
-
 type EventItem = {
   id: number;
   clientName: string;
@@ -67,138 +41,155 @@ type EventItem = {
   eventType: EventType;
   city: string;
   venue: string;
-  date: string; // yyyy-mm-dd
+  date: string; // YYYY-MM-DD
   guests: string;
-  budget: string; // revenue expected
-  status: EventStatus;
+  budget: string; // revenue quote string
   leadSource: string;
   owner: string;
   notes: string;
-
-  // New: tracking + ops
-  stage?: TrackStage;
-  progress?: number; // 0-100
-  startedAt?: string; // ISO
-  completedAt?: string; // ISO
-  checklist?: ChecklistItem[];
-  activity?: ActivityItem[];
-
-  // Existing
-  vendors?: VendorAssignment[];
-  issues?: IssueItem[];
-
-  // Finance link helpers
-  advanceReceived?: string; // ₹ string
+  cancelled?: boolean;
+  vendors: VendorAssignment[];
+  issues: IssueItem[];
 };
 
+/* ===================== FINANCE TYPES (localStorage bridge) ===================== */
 type TxType = "Income" | "Expense";
 type FinanceTx = {
   id: number;
-  date: string; // yyyy-mm-dd
+  date: string; // YYYY-MM-DD
   type: TxType;
-  category: string;
-  amount: number; // number
+  category: string; // "Event Revenue", "Vendor Payout", etc.
   description: string;
-  eventId?: number;
-  eventName?: string;
-  createdBy?: string;
+  amount: number; // number
+  refEventId?: number;
+  refEventName?: string;
+  createdBy: string;
 };
 
 /* ===================== HELPERS ===================== */
-
-function safeNowISO() {
-  return new Date().toISOString();
+function safeJSONParse<T>(raw: string | null, fallback: T): T {
+  if (!raw) return fallback;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return fallback;
+  }
 }
-function todayYMD() {
+
+function todayISO(): string {
   return new Date().toISOString().slice(0, 10);
 }
+
 function parseMoney(value: string): number {
-  const cleaned = (value || "").toString().replace(/[₹, ]/g, "");
-  const n = parseFloat(cleaned);
-  return isNaN(n) ? 0 : n;
-}
-function formatINR(value: number): string {
-  return value.toLocaleString("en-IN", { maximumFractionDigits: 0 });
-}
-function clamp(n: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, n));
-}
-function stageFromStatus(status: EventStatus): TrackStage {
-  if (status === "Completed") return "Completed";
-  if (status === "Cancelled") return "Cancelled";
-  if (status === "In Execution") return "In execution";
-  if (status === "Planning" || status === "Confirmed") return "In planning";
-  return "Not started";
-}
-function progressFromStatus(status: EventStatus): number {
-  // Simple but realistic mapping
-  const map: Record<EventStatus, number> = {
-    "New Lead": 5,
-    "Proposal Sent": 15,
-    Negotiation: 25,
-    Confirmed: 40,
-    Planning: 60,
-    "In Execution": 85,
-    Completed: 100,
-    Cancelled: 0,
-  };
-  return map[status] ?? 0;
-}
-function statusColor(status: EventStatus) {
-  if (status === "Completed") return "eventura-tag-green";
-  if (status === "Cancelled") return "eventura-tag-amber";
-  if (status === "In Execution") return "eventura-tag-blue";
-  if (status === "Planning" || status === "Confirmed") return "eventura-tag-blue";
-  return "eventura-tag-amber";
+  const cleaned = (value || "").replace(/[₹, ]/g, "");
+  const n = Number(cleaned);
+  return Number.isFinite(n) ? n : 0;
 }
 
-function defaultChecklist(): ChecklistItem[] {
+function formatINR(n: number): string {
+  return n.toLocaleString("en-IN", { maximumFractionDigits: 0 });
+}
+
+/** LIVE phase derived from date (and cancelled flag) */
+function deriveEventPhase(event: EventItem): EventPhase {
+  if (event.cancelled) return "Cancelled";
+  if (!event.date) return "Not Started";
+
+  const today = new Date();
+  const d = new Date(event.date);
+  // normalize times
+  today.setHours(0, 0, 0, 0);
+  d.setHours(0, 0, 0, 0);
+
+  const diffDays = Math.round((d.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+
+  if (diffDays > 30) return "Not Started";
+  if (diffDays > 1) return "Planning";
+  if (diffDays >= -1 && diffDays <= 1) return "In Progress";
+  return "Completed";
+}
+
+function phaseProgress(phase: EventPhase): number {
+  if (phase === "Not Started") return 20;
+  if (phase === "Planning") return 45;
+  if (phase === "In Progress") return 75;
+  if (phase === "Completed") return 100;
+  return 100; // Cancelled
+}
+
+function phaseTagClass(phase: EventPhase): string {
+  if (phase === "Completed") return "eventura-tag-green";
+  if (phase === "In Progress") return "eventura-tag-blue";
+  if (phase === "Planning") return "eventura-tag-amber";
+  if (phase === "Cancelled") return "eventura-tag-amber";
+  return "eventura-tag-blue";
+}
+
+/* ===== timeline ===== */
+type TimelineItem = { label: string; displayDate: string; isPast: boolean };
+function buildTimeline(eventDate: string): TimelineItem[] {
+  if (!eventDate) {
+    return [{ label: "Set event date", displayDate: "No date selected", isPast: false }];
+  }
+  const base = new Date(eventDate);
+  base.setHours(0, 0, 0, 0);
+
+  const steps = [
+    { label: "Venue booking", offsetDays: -60 },
+    { label: "Vendor confirmations", offsetDays: -45 },
+    { label: "Decor mockups ready", offsetDays: -30 },
+    { label: "Logistics planning", offsetDays: -7 },
+    { label: "Material loading", offsetDays: -3 },
+    { label: "Event day – execution", offsetDays: 0 },
+    { label: "Post-event payment & review", offsetDays: 2 },
+  ];
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  return steps.map((s) => {
+    const d = new Date(base);
+    d.setDate(d.getDate() + s.offsetDays);
+    const displayDate = d.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+    return { label: s.label, displayDate, isPast: d.getTime() < today.getTime() };
+  });
+}
+
+/* ===================== SEED ===================== */
+function seedEvents(ownerName: string): EventItem[] {
   return [
-    { id: 1, text: "Venue confirmed", done: false, phase: "Planning" },
-    { id: 2, text: "Vendors finalized", done: false, phase: "Planning" },
-    { id: 3, text: "Decor mockup approved", done: false, phase: "Planning" },
-    { id: 4, text: "Logistics plan ready", done: false, phase: "Planning" },
-    { id: 5, text: "Material loaded", done: false, phase: "Execution" },
-    { id: 6, text: "Stage setup completed", done: false, phase: "Execution" },
-    { id: 7, text: "Sound & lights tested", done: false, phase: "Execution" },
-    { id: 8, text: "Client sign-off / handover", done: false, phase: "Execution" },
+    {
+      id: Date.now(),
+      clientName: "Patel Family",
+      eventName: "Patel Wedding Sangeet",
+      eventType: "Wedding",
+      city: "Surat",
+      venue: "Laxmi Farm",
+      date: todayISO(),
+      guests: "450",
+      budget: "1850000",
+      leadSource: "Instagram",
+      owner: ownerName || "Hardik",
+      notes: "Royal floral + gold theme; live dhol & DJ.",
+      cancelled: false,
+      vendors: [
+        { id: 1, name: "Royal Decor Studio", category: "Decor", amount: "650000", status: "Planned" },
+        { id: 2, name: "Shree Caterers", category: "Catering", amount: "750000", status: "Planned" },
+      ],
+      issues: [],
+    },
   ];
 }
 
-function pushActivity(ev: EventItem, by: string, action: string): EventItem {
-  const a: ActivityItem = { id: Date.now(), at: safeNowISO(), by, action };
-  return { ...ev, activity: [a, ...(ev.activity ?? [])] };
-}
-
-function readFinanceTx(): FinanceTx[] {
-  if (typeof window === "undefined") return [];
-  const raw = window.localStorage.getItem(FIN_TX_KEY);
-  if (!raw) return [];
-  try {
-    return JSON.parse(raw) as FinanceTx[];
-  } catch {
-    return [];
-  }
-}
-function writeFinanceTx(next: FinanceTx[]) {
-  if (typeof window === "undefined") return;
-  window.localStorage.setItem(FIN_TX_KEY, JSON.stringify(next));
-}
-function addFinanceTx(tx: FinanceTx) {
-  const prev = readFinanceTx();
-  writeFinanceTx([tx, ...prev]);
-}
-
 /* ===================== PAGE ===================== */
-
 export default function EventsPage() {
   const [user, setUser] = useState<User | null>(null);
   const [events, setEvents] = useState<EventItem[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
-
   const [editingId, setEditingId] = useState<number | null>(null);
+
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<EventStatus | "All">("All");
+  const [phaseFilter, setPhaseFilter] = useState<EventPhase | "All">("All");
 
   const [form, setForm] = useState<Omit<EventItem, "id">>({
     clientName: "",
@@ -209,22 +200,15 @@ export default function EventsPage() {
     date: "",
     guests: "",
     budget: "",
-    status: "New Lead",
     leadSource: "",
     owner: "",
     notes: "",
+    cancelled: false,
     vendors: [],
     issues: [],
-    stage: "Not started",
-    progress: 5,
-    startedAt: undefined,
-    completedAt: undefined,
-    checklist: defaultChecklist(),
-    activity: [],
-    advanceReceived: "",
   });
 
-  // AUTH
+  /* ===== AUTH ===== */
   useEffect(() => {
     if (typeof window === "undefined") return;
     const raw = window.localStorage.getItem(USER_KEY);
@@ -232,82 +216,53 @@ export default function EventsPage() {
       window.location.href = "/login";
       return;
     }
-    try {
-      const u: User = JSON.parse(raw);
-      setUser(u);
-      setForm((p) => ({ ...p, owner: p.owner || u.name }));
-    } catch {
+    const u = safeJSONParse<User | null>(raw, null);
+    if (!u) {
       window.localStorage.removeItem(USER_KEY);
       window.location.href = "/login";
+      return;
     }
+    setUser(u);
+    setForm((p) => ({ ...p, owner: p.owner || u.name }));
   }, []);
 
-  // LOAD EVENTS
+  /* ===== LOAD EVENTS ===== */
   useEffect(() => {
     if (typeof window === "undefined") return;
-
     const raw = window.localStorage.getItem(EVENTS_KEY);
-    if (raw) {
-      try {
-        const parsed: EventItem[] = JSON.parse(raw).map((e: any) => {
-          const status: EventStatus = e.status ?? "New Lead";
-          const stage: TrackStage = e.stage ?? stageFromStatus(status);
-          const progress = typeof e.progress === "number" ? e.progress : progressFromStatus(status);
-          return {
-            ...e,
-            vendors: e.vendors ?? [],
-            issues: e.issues ?? [],
-            activity: e.activity ?? [],
-            checklist: e.checklist ?? defaultChecklist(),
-            stage,
-            progress,
-          } as EventItem;
-        });
-        setEvents(parsed);
-        setSelectedId(parsed.length ? parsed[0].id : null);
-        return;
-      } catch {
-        // fallthrough to seed
-      }
+    const parsed = safeJSONParse<any[]>(raw, []);
+    if (parsed.length > 0) {
+      const normalized: EventItem[] = parsed.map((e) => ({
+        id: Number(e.id),
+        clientName: String(e.clientName || ""),
+        eventName: String(e.eventName || ""),
+        eventType: (e.eventType as EventType) || "Other",
+        city: String(e.city || ""),
+        venue: String(e.venue || ""),
+        date: String(e.date || ""),
+        guests: String(e.guests || ""),
+        budget: String(e.budget || ""),
+        leadSource: String(e.leadSource || ""),
+        owner: String(e.owner || ""),
+        notes: String(e.notes || ""),
+        cancelled: Boolean(e.cancelled || false),
+        vendors: Array.isArray(e.vendors) ? e.vendors : [],
+        issues: Array.isArray(e.issues) ? e.issues : [],
+      }));
+      setEvents(normalized);
+      setSelectedId(normalized[0]?.id ?? null);
+      return;
     }
 
-    // SEED (first time)
-    const seed: EventItem[] = [
-      {
-        id: Date.now(),
-        clientName: "Patel Family",
-        eventName: "Patel Wedding Sangeet",
-        eventType: "Wedding",
-        city: "Surat",
-        venue: "Laxmi Farm",
-        date: todayYMD(),
-        guests: "450",
-        budget: "1850000",
-        status: "Planning",
-        leadSource: "Instagram",
-        owner: "Hardik Vekariya",
-        notes: "Royal floral + gold theme; live dhol & DJ.",
-        vendors: [
-          { id: 1, name: "Royal Decor Studio", category: "Decor", amount: "650000", status: "Planned" },
-          { id: 2, name: "Shree Caterers", category: "Catering", amount: "750000", status: "Planned" },
-        ],
-        issues: [],
-        stage: stageFromStatus("Planning"),
-        progress: progressFromStatus("Planning"),
-        startedAt: undefined,
-        completedAt: undefined,
-        checklist: defaultChecklist(),
-        activity: [{ id: 11, at: safeNowISO(), by: "System", action: "Seed event created" }],
-        advanceReceived: "",
-      },
-    ];
-
+    // seed only once
+    const ownerName = safeJSONParse<User | null>(window.localStorage.getItem(USER_KEY), null)?.name || "Hardik";
+    const seed = seedEvents(ownerName);
     setEvents(seed);
-    setSelectedId(seed[0].id);
+    setSelectedId(seed[0]?.id ?? null);
     window.localStorage.setItem(EVENTS_KEY, JSON.stringify(seed));
   }, []);
 
-  // PERSIST EVENTS
+  /* ===== SAVE EVENTS ===== */
   useEffect(() => {
     if (typeof window === "undefined") return;
     window.localStorage.setItem(EVENTS_KEY, JSON.stringify(events));
@@ -317,16 +272,6 @@ export default function EventsPage() {
     e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>
   ) {
     const { name, value } = e.target;
-    if (name === "status") {
-      const st = value as EventStatus;
-      setForm((prev) => ({
-        ...prev,
-        status: st,
-        stage: stageFromStatus(st),
-        progress: progressFromStatus(st),
-      }));
-      return;
-    }
     setForm((prev) => ({ ...prev, [name]: value }));
   }
 
@@ -341,19 +286,12 @@ export default function EventsPage() {
       date: "",
       guests: "",
       budget: "",
-      status: "New Lead",
       leadSource: "",
       owner: user?.name ?? "",
       notes: "",
+      cancelled: false,
       vendors: [],
       issues: [],
-      stage: "Not started",
-      progress: 5,
-      startedAt: undefined,
-      completedAt: undefined,
-      checklist: defaultChecklist(),
-      activity: [],
-      advanceReceived: "",
     });
   }
 
@@ -364,33 +302,24 @@ export default function EventsPage() {
       return;
     }
 
-    const normalized: Omit<EventItem, "id"> = {
-      ...form,
-      vendors: form.vendors ?? [],
-      issues: form.issues ?? [],
-      checklist: form.checklist ?? defaultChecklist(),
-      activity: form.activity ?? [],
-      stage: stageFromStatus(form.status),
-      progress: clamp(typeof form.progress === "number" ? form.progress : progressFromStatus(form.status), 0, 100),
-    };
-
     if (editingId == null) {
       const newEvent: EventItem = {
         id: Date.now(),
-        ...normalized,
+        ...form,
+        vendors: form.vendors ?? [],
+        issues: form.issues ?? [],
       };
-      setEvents((prev) => [pushActivity(newEvent, user?.name ?? "System", "Event created"), ...prev]);
+      setEvents((prev) => [newEvent, ...prev]);
       setSelectedId(newEvent.id);
     } else {
       setEvents((prev) =>
         prev.map((ev) =>
           ev.id === editingId
-            ? pushActivity({ ...ev, ...normalized }, user?.name ?? "System", "Event updated")
+            ? { ...ev, ...form, vendors: form.vendors ?? [], issues: form.issues ?? [] }
             : ev
         )
       );
     }
-
     resetForm();
   }
 
@@ -398,6 +327,7 @@ export default function EventsPage() {
     const ev = events.find((e) => e.id === eventId);
     if (!ev) return;
     setEditingId(ev.id);
+    setSelectedId(ev.id);
     setForm({
       clientName: ev.clientName,
       eventName: ev.eventName,
@@ -407,28 +337,20 @@ export default function EventsPage() {
       date: ev.date,
       guests: ev.guests,
       budget: ev.budget,
-      status: ev.status,
       leadSource: ev.leadSource,
       owner: ev.owner,
       notes: ev.notes,
+      cancelled: Boolean(ev.cancelled || false),
       vendors: ev.vendors ?? [],
       issues: ev.issues ?? [],
-      stage: ev.stage ?? stageFromStatus(ev.status),
-      progress: typeof ev.progress === "number" ? ev.progress : progressFromStatus(ev.status),
-      startedAt: ev.startedAt,
-      completedAt: ev.completedAt,
-      checklist: ev.checklist ?? defaultChecklist(),
-      activity: ev.activity ?? [],
-      advanceReceived: ev.advanceReceived ?? "",
     });
-    setSelectedId(ev.id);
   }
 
   function handleDelete(eventId: number) {
     if (!confirm("Delete this event? This cannot be undone.")) return;
     setEvents((prev) => {
       const next = prev.filter((e) => e.id !== eventId);
-      if (selectedId === eventId) setSelectedId(next.length ? next[0].id : null);
+      if (selectedId === eventId) setSelectedId(next[0]?.id ?? null);
       if (editingId === eventId) resetForm();
       return next;
     });
@@ -438,35 +360,27 @@ export default function EventsPage() {
     setEvents((prev) => prev.map((e) => (e.id === updated.id ? updated : e)));
   }
 
-  const filteredEvents = events.filter((ev) => {
-    const q = search.trim().toLowerCase();
-    const matchSearch =
-      !q ||
-      ev.clientName.toLowerCase().includes(q) ||
-      ev.eventName.toLowerCase().includes(q) ||
-      ev.city.toLowerCase().includes(q) ||
-      ev.owner.toLowerCase().includes(q);
+  const filteredEvents = useMemo(() => {
+    return events.filter((ev) => {
+      const phase = deriveEventPhase(ev);
+      const matchPhase = phaseFilter === "All" ? true : phase === phaseFilter;
 
-    const matchStatus = statusFilter === "All" ? true : ev.status === statusFilter;
-    return matchSearch && matchStatus;
-  });
+      const q = search.trim().toLowerCase();
+      const matchSearch =
+        !q ||
+        ev.clientName.toLowerCase().includes(q) ||
+        ev.eventName.toLowerCase().includes(q) ||
+        ev.city.toLowerCase().includes(q);
+
+      return matchPhase && matchSearch;
+    });
+  }, [events, search, phaseFilter]);
 
   const selectedEvent = events.find((ev) => ev.id === selectedId) ?? null;
 
   if (!user) return null;
-  const isCEO = user.role === "CEO";
 
-  // KPIs
-  const kpis = useMemo(() => {
-    const total = events.length;
-    const completed = events.filter((e) => e.status === "Completed").length;
-    const inExecution = events.filter((e) => e.status === "In Execution").length;
-    const planning = events.filter((e) => e.status === "Planning" || e.status === "Confirmed").length;
-    const pipeline = events.filter((e) =>
-      e.status === "New Lead" || e.status === "Proposal Sent" || e.status === "Negotiation"
-    ).length;
-    return { total, completed, inExecution, planning, pipeline };
-  }, [events]);
+  const isCEO = user.role === "CEO";
 
   return (
     <main className="eventura-os">
@@ -482,42 +396,15 @@ export default function EventsPage() {
             <div>
               <h1 className="eventura-page-title">Events</h1>
               <p className="eventura-subtitle">
-                Live tracking + timeline + vendors + issues — connected to Finance.
+                Live tracking (Not Started → Planning → In Progress → Completed) + Finance connection.
               </p>
             </div>
-            <div className="eventura-actions" style={{ gap: "0.5rem" }}>
-              <Link className="eventura-button-secondary" href="/finance">
-                Open Finance
-              </Link>
+            <div className="eventura-actions">
               <button className="eventura-button" type="button" onClick={resetForm}>
                 + New Event
               </button>
             </div>
           </div>
-
-          {/* KPI Row */}
-          <section className="eventura-grid" style={{ marginBottom: "1rem" }}>
-            <div className="eventura-card eventura-card-glow">
-              <p className="eventura-card-label">Total</p>
-              <p className="eventura-card-value">{kpis.total}</p>
-              <p className="eventura-card-note">All events in system</p>
-            </div>
-            <div className="eventura-card eventura-card-glow">
-              <p className="eventura-card-label">Pipeline</p>
-              <p className="eventura-card-value">{kpis.pipeline}</p>
-              <p className="eventura-card-note">Lead → Proposal → Negotiation</p>
-            </div>
-            <div className="eventura-card eventura-card-glow">
-              <p className="eventura-card-label">Planning</p>
-              <p className="eventura-card-value">{kpis.planning}</p>
-              <p className="eventura-card-note">Confirmed / Planning stage</p>
-            </div>
-            <div className="eventura-card eventura-card-glow">
-              <p className="eventura-card-label">Live now</p>
-              <p className="eventura-card-value">{kpis.inExecution}</p>
-              <p className="eventura-card-note">In Execution right now</p>
-            </div>
-          </section>
 
           <div className="eventura-columns">
             {/* LEFT */}
@@ -570,28 +457,6 @@ export default function EventsPage() {
                     </div>
 
                     <div className="eventura-field">
-                      <label className="eventura-label" htmlFor="status">Status</label>
-                      <select
-                        id="status"
-                        name="status"
-                        className="eventura-input"
-                        value={form.status}
-                        onChange={handleFormChange}
-                      >
-                        <option>New Lead</option>
-                        <option>Proposal Sent</option>
-                        <option>Negotiation</option>
-                        <option>Confirmed</option>
-                        <option>Planning</option>
-                        <option>In Execution</option>
-                        <option>Completed</option>
-                        <option>Cancelled</option>
-                      </select>
-                    </div>
-                  </div>
-
-                  <div className="eventura-form-grid">
-                    <div className="eventura-field">
                       <label className="eventura-label" htmlFor="date">Event date</label>
                       <input
                         id="date"
@@ -602,6 +467,9 @@ export default function EventsPage() {
                         onChange={handleFormChange}
                       />
                     </div>
+                  </div>
+
+                  <div className="eventura-form-grid">
                     <div className="eventura-field">
                       <label className="eventura-label" htmlFor="city">City</label>
                       <input
@@ -613,9 +481,6 @@ export default function EventsPage() {
                         placeholder="Surat / Ahmedabad / Rajkot"
                       />
                     </div>
-                  </div>
-
-                  <div className="eventura-form-grid">
                     <div className="eventura-field">
                       <label className="eventura-label" htmlFor="venue">Venue</label>
                       <input
@@ -627,8 +492,11 @@ export default function EventsPage() {
                         placeholder="e.g. Laxmi Farm"
                       />
                     </div>
+                  </div>
+
+                  <div className="eventura-form-grid">
                     <div className="eventura-field">
-                      <label className="eventura-label" htmlFor="guests">Guests</label>
+                      <label className="eventura-label" htmlFor="guests">Guests (approx)</label>
                       <input
                         id="guests"
                         name="guests"
@@ -638,11 +506,8 @@ export default function EventsPage() {
                         placeholder="e.g. 450"
                       />
                     </div>
-                  </div>
-
-                  <div className="eventura-form-grid">
                     <div className="eventura-field">
-                      <label className="eventura-label" htmlFor="budget">Revenue / budget (₹)</label>
+                      <label className="eventura-label" htmlFor="budget">Quoted revenue (₹)</label>
                       <input
                         id="budget"
                         name="budget"
@@ -652,6 +517,9 @@ export default function EventsPage() {
                         placeholder="e.g. 18,50,000"
                       />
                     </div>
+                  </div>
+
+                  <div className="eventura-form-grid">
                     <div className="eventura-field">
                       <label className="eventura-label" htmlFor="leadSource">Lead source</label>
                       <input
@@ -663,9 +531,6 @@ export default function EventsPage() {
                         placeholder="Instagram / Referral / Venue / Google"
                       />
                     </div>
-                  </div>
-
-                  <div className="eventura-form-grid">
                     <div className="eventura-field">
                       <label className="eventura-label" htmlFor="owner">Owner / manager</label>
                       <input
@@ -677,21 +542,9 @@ export default function EventsPage() {
                         placeholder="Hardik / Shubh / Dixit"
                       />
                     </div>
-
-                    <div className="eventura-field">
-                      <label className="eventura-label" htmlFor="advanceReceived">Advance received (₹)</label>
-                      <input
-                        id="advanceReceived"
-                        name="advanceReceived"
-                        className="eventura-input"
-                        value={form.advanceReceived ?? ""}
-                        onChange={handleFormChange}
-                        placeholder="e.g. 3,00,000"
-                      />
-                    </div>
                   </div>
 
-                  <div className="eventura-field" style={{ marginTop: "0.6rem" }}>
+                  <div className="eventura-field" style={{ marginTop: "0.7rem" }}>
                     <label className="eventura-label" htmlFor="notes">Notes</label>
                     <textarea
                       id="notes"
@@ -699,42 +552,23 @@ export default function EventsPage() {
                       className="eventura-textarea"
                       value={form.notes}
                       onChange={handleFormChange}
-                      placeholder="Client preferences, theme, must-have items..."
+                      placeholder="Client preferences, colour palette, must-have elements..."
                     />
                   </div>
 
-                  {/* Progress preview */}
-                  <div style={{ marginTop: "0.7rem" }}>
-                    <div className="eventura-small-text" style={{ display: "flex", justifyContent: "space-between" }}>
-                      <span>Live tracking: {form.stage ?? stageFromStatus(form.status)}</span>
-                      <span>{form.progress ?? progressFromStatus(form.status)}%</span>
-                    </div>
-                    <div style={{ height: 10, background: "rgba(148,163,184,0.25)", borderRadius: 999, marginTop: 6 }}>
-                      <div
-                        style={{
-                          width: `${clamp(form.progress ?? progressFromStatus(form.status), 0, 100)}%`,
-                          height: "100%",
-                          borderRadius: 999,
-                          background: "rgba(139,92,246,0.95)",
-                        }}
-                      />
-                    </div>
-                  </div>
-
-                  <div className="eventura-actions" style={{ marginTop: "0.8rem" }}>
+                  <div className="eventura-actions" style={{ marginTop: "0.6rem" }}>
                     <button type="submit" className="eventura-button">
                       {editingId ? "Update event" : "Save event"}
                     </button>
                     {editingId && (
                       <button type="button" className="eventura-button-secondary" onClick={resetForm}>
-                        Cancel
+                        Cancel edit
                       </button>
                     )}
                   </div>
                 </form>
               </div>
 
-              {/* LIST */}
               <div className="eventura-panel" style={{ marginTop: "1rem" }}>
                 <h2 className="eventura-panel-title">Event list</h2>
 
@@ -742,24 +576,22 @@ export default function EventsPage() {
                   <div className="eventura-field">
                     <input
                       className="eventura-input"
-                      placeholder="Search: client, event, city, owner..."
+                      placeholder="Search by client, event or city..."
                       value={search}
                       onChange={(e) => setSearch(e.target.value)}
                     />
                   </div>
+
                   <div className="eventura-field">
                     <select
                       className="eventura-input"
-                      value={statusFilter}
-                      onChange={(e) => setStatusFilter(e.target.value as EventStatus | "All")}
+                      value={phaseFilter}
+                      onChange={(e) => setPhaseFilter(e.target.value as EventPhase | "All")}
                     >
-                      <option value="All">All statuses</option>
-                      <option value="New Lead">New Lead</option>
-                      <option value="Proposal Sent">Proposal Sent</option>
-                      <option value="Negotiation">Negotiation</option>
-                      <option value="Confirmed">Confirmed</option>
+                      <option value="All">All phases</option>
+                      <option value="Not Started">Not Started</option>
                       <option value="Planning">Planning</option>
-                      <option value="In Execution">In Execution</option>
+                      <option value="In Progress">In Progress</option>
                       <option value="Completed">Completed</option>
                       <option value="Cancelled">Cancelled</option>
                     </select>
@@ -773,8 +605,7 @@ export default function EventsPage() {
                 ) : (
                   <ul className="eventura-list">
                     {filteredEvents.map((ev) => {
-                      const stage = ev.stage ?? stageFromStatus(ev.status);
-                      const progress = typeof ev.progress === "number" ? ev.progress : progressFromStatus(ev.status);
+                      const phase = deriveEventPhase(ev);
                       return (
                         <li
                           key={ev.id}
@@ -787,34 +618,19 @@ export default function EventsPage() {
                           }}
                           onClick={() => setSelectedId(ev.id)}
                         >
-                          <div style={{ minWidth: 0 }}>
-                            <div className="eventura-list-title" style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                                {ev.eventName}
-                              </span>
-                              <span className={"eventura-tag " + statusColor(ev.status)}>
-                                {stage}
-                              </span>
-                            </div>
+                          <div>
+                            <div className="eventura-list-title">{ev.eventName}</div>
                             <div className="eventura-list-sub">
-                              {ev.clientName} · {ev.city} · {ev.date || "No date"} · {ev.eventType} · Owner: {ev.owner}
+                              {ev.clientName} · {ev.city} · {ev.date || "No date"} · {ev.eventType}
                             </div>
-
-                            <div style={{ marginTop: 6 }}>
-                              <div style={{ height: 8, background: "rgba(148,163,184,0.25)", borderRadius: 999 }}>
-                                <div
-                                  style={{
-                                    width: `${clamp(progress, 0, 100)}%`,
-                                    height: "100%",
-                                    borderRadius: 999,
-                                    background: "rgba(34,197,94,0.85)",
-                                  }}
-                                />
-                              </div>
+                            <div style={{ marginTop: "0.25rem" }}>
+                              <span className={"eventura-tag " + phaseTagClass(phase)}>
+                                {phase}
+                              </span>
                             </div>
                           </div>
 
-                          <div style={{ display: "flex", gap: "0.35rem", alignItems: "center" }}>
+                          <div style={{ display: "flex", gap: "0.35rem", alignItems: "flex-start" }}>
                             <button
                               type="button"
                               className="eventura-tag eventura-tag-blue"
@@ -848,12 +664,12 @@ export default function EventsPage() {
             <div className="eventura-panel">
               {!selectedEvent ? (
                 <p style={{ fontSize: "0.8rem", color: "#9ca3af" }}>
-                  Select an event to see live tracking, checklist, vendors, issues and finance sync.
+                  Select an event from the list to see live tracking, vendors, issues and finance connection.
                 </p>
               ) : (
                 <EventDetail
-                  user={user}
                   event={selectedEvent}
+                  user={user}
                   isCEO={isCEO}
                   onUpdate={handleUpdateEvent}
                 />
@@ -867,34 +683,34 @@ export default function EventsPage() {
 }
 
 /* ===================== DETAIL ===================== */
-
 function EventDetail({
-  user,
   event,
+  user,
   isCEO,
   onUpdate,
 }: {
-  user: User;
   event: EventItem;
+  user: User;
   isCEO: boolean;
   onUpdate: (e: EventItem) => void;
 }) {
-  const stage = event.stage ?? stageFromStatus(event.status);
-  const progress = typeof event.progress === "number" ? event.progress : progressFromStatus(event.status);
+  const phase = deriveEventPhase(event);
+  const progress = phaseProgress(phase);
+  const timeline = buildTimeline(event.date);
 
-  const eventDate = event.date ? new Date(event.date) : null;
-  const today = new Date();
-  const daysToEvent =
-    eventDate != null ? Math.round((eventDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24)) : null;
+  const guests = parseInt(event.guests || "0", 10) || 0;
 
-  const revenue = parseMoney(event.budget || "0");
-  const advance = parseMoney(event.advanceReceived || "0");
+  const basePerHead =
+    event.eventType === "Wedding" ? 3500 : event.eventType === "Corporate" ? 2800 : 2200;
 
-  const vendorTotal = (event.vendors ?? []).reduce((sum, v) => sum + parseMoney(v.amount), 0);
+  const suggestedBudget = guests > 0 ? guests * basePerHead : 0;
+  const quotedRevenue = parseMoney(event.budget || "0");
+
+  const vendorTotal = (event.vendors ?? []).reduce((sum, v) => sum + parseMoney(v.amount || "0"), 0);
+  const revenue = quotedRevenue || suggestedBudget;
   const profit = revenue - vendorTotal;
   const margin = revenue > 0 ? (profit / revenue) * 100 : 0;
 
-  // Drafts
   const [vendorDraft, setVendorDraft] = useState({
     name: "",
     category: "",
@@ -902,108 +718,12 @@ function EventDetail({
     status: "Planned" as VendorStatus,
   });
   const [issueDraft, setIssueDraft] = useState("");
-  const [checklist, setChecklist] = useState<ChecklistItem[]>(event.checklist ?? defaultChecklist());
-
-  useEffect(() => {
-    setChecklist(event.checklist ?? defaultChecklist());
-  }, [event.id]); // rebind when selecting another event
-
-  function updateEvent(next: Partial<EventItem>, activityAction?: string) {
-    const merged: EventItem = {
-      ...event,
-      ...next,
-      vendors: next.vendors ?? event.vendors ?? [],
-      issues: next.issues ?? event.issues ?? [],
-      checklist: next.checklist ?? event.checklist ?? [],
-      activity: next.activity ?? event.activity ?? [],
-    };
-
-    const withTrack: EventItem = {
-      ...merged,
-      stage: merged.stage ?? stageFromStatus(merged.status),
-      progress: typeof merged.progress === "number" ? merged.progress : progressFromStatus(merged.status),
-    };
-
-    const final = activityAction ? pushActivity(withTrack, user.name, activityAction) : withTrack;
-    onUpdate(final);
-  }
-
-  /* ===== QUICK ACTIONS (LIVE TRACKING) ===== */
-
-  function markPlanning() {
-    // If going to Planning/Confirmed, log + (optional) auto finance income for advance
-    updateEvent({ status: "Planning", stage: "In planning", progress: 60 }, "Moved to Planning");
-  }
-
-  function markExecutionStart() {
-    updateEvent(
-      { status: "In Execution", stage: "In execution", progress: 85, startedAt: event.startedAt ?? safeNowISO() },
-      "Execution started"
-    );
-  }
-
-  function markCompleted() {
-    updateEvent(
-      { status: "Completed", stage: "Completed", progress: 100, completedAt: safeNowISO() },
-      "Event marked Completed"
-    );
-
-    // Finance sync: record remaining revenue as Income (if any)
-    // Only if revenue > 0, and (revenue - advance) > 0
-    const remaining = Math.max(0, revenue - advance);
-    if (remaining > 0) {
-      addFinanceTx({
-        id: Date.now(),
-        date: todayYMD(),
-        type: "Income",
-        category: "Event Revenue",
-        amount: remaining,
-        description: `Final payment received: ${event.eventName}`,
-        eventId: event.id,
-        eventName: event.eventName,
-        createdBy: user.name,
-      });
-    }
-  }
-
-  function recordAdvanceToFinance() {
-    const amt = parseMoney(event.advanceReceived || "0");
-    if (amt <= 0) {
-      alert("Enter advance received amount in the event form (Advance received).");
-      return;
-    }
-    addFinanceTx({
-      id: Date.now(),
-      date: todayYMD(),
-      type: "Income",
-      category: "Advance / Booking",
-      amount: amt,
-      description: `Advance received: ${event.eventName} (${event.clientName})`,
-      eventId: event.id,
-      eventName: event.eventName,
-      createdBy: user.name,
-    });
-    updateEvent({}, "Advance synced to Finance");
-  }
-
-  /* ===== CHECKLIST ===== */
-
-  function toggleChecklist(itemId: number) {
-    const next = checklist.map((c) => (c.id === itemId ? { ...c, done: !c.done } : c));
-    setChecklist(next);
-    updateEvent({ checklist: next }, "Checklist updated");
-    // also auto adjust progress slightly (optional)
-    const doneCount = next.filter((x) => x.done).length;
-    const pct = Math.round((doneCount / next.length) * 100);
-    // keep status-based progress as base, but reflect checklist completion
-    const mixed = clamp(Math.round((progressFromStatus(event.status) * 0.6) + (pct * 0.4)), 0, 100);
-    updateEvent({ progress: mixed }, undefined);
-  }
-
-  /* ===== VENDORS (FINANCE LINK) ===== */
 
   function updateVendors(next: VendorAssignment[]) {
-    updateEvent({ vendors: next }, "Vendors updated");
+    onUpdate({ ...event, vendors: next });
+  }
+  function updateIssues(next: IssueItem[]) {
+    onUpdate({ ...event, issues: next });
   }
 
   function handleAddVendor(e: React.FormEvent) {
@@ -1021,217 +741,207 @@ function EventDetail({
   }
 
   function handleDeleteVendor(id: number) {
-    const next = (event.vendors ?? []).filter((v) => v.id !== id);
-    updateVendors(next);
+    updateVendors((event.vendors ?? []).filter((v) => v.id !== id));
   }
 
   function handleVendorStatusChange(id: number, status: VendorStatus) {
-    const next = (event.vendors ?? []).map((v) => (v.id === id ? { ...v, status } : v));
-    updateVendors(next);
-
-    // Finance sync: when marked Paid -> add Expense tx (one-click)
-    const v = (event.vendors ?? []).find((x) => x.id === id);
-    if (v && status === "Paid") {
-      const amt = parseMoney(v.amount);
-      if (amt > 0) {
-        addFinanceTx({
-          id: Date.now(),
-          date: todayYMD(),
-          type: "Expense",
-          category: `Vendor: ${v.category}`,
-          amount: amt,
-          description: `Vendor paid: ${v.name} (${event.eventName})`,
-          eventId: event.id,
-          eventName: event.eventName,
-          createdBy: user.name,
-        });
-        updateEvent({}, `Vendor payment synced to Finance (${v.name})`);
-      }
-    }
-  }
-
-  /* ===== ISSUES ===== */
-
-  function updateIssues(next: IssueItem[]) {
-    updateEvent({ issues: next }, "Issues updated");
+    updateVendors((event.vendors ?? []).map((v) => (v.id === id ? { ...v, status } : v)));
   }
 
   function handleAddIssue(e: React.FormEvent) {
     e.preventDefault();
-    if (!issueDraft.trim()) return;
+    const text = issueDraft.trim();
+    if (!text) return;
+
     const next: IssueItem[] = [
       ...(event.issues ?? []),
-      { id: Date.now(), text: issueDraft.trim(), status: "Open", createdAt: safeNowISO() },
+      { id: Date.now(), text, status: "Open", createdAt: new Date().toISOString() },
     ];
     updateIssues(next);
     setIssueDraft("");
   }
 
   function handleToggleIssue(id: number) {
-    const next = (event.issues ?? []).map((iss) =>
+    const next: IssueItem[] = (event.issues ?? []).map((iss) =>
       iss.id === id ? { ...iss, status: iss.status === "Open" ? "Resolved" : "Open" } : iss
     );
     updateIssues(next);
   }
 
-  /* ===== RENDER ===== */
+  function toggleCancelled() {
+    onUpdate({ ...event, cancelled: !event.cancelled });
+  }
+
+  /** Writes finance transaction into localStorage (Finance tab can read it) */
+  function pushFinanceTx(tx: Omit<FinanceTx, "id">) {
+    if (typeof window === "undefined") return;
+    const existing = safeJSONParse<FinanceTx[]>(window.localStorage.getItem(FIN_KEY), []);
+    const full: FinanceTx = { id: Date.now(), ...tx };
+    window.localStorage.setItem(FIN_KEY, JSON.stringify([full, ...existing]));
+    alert("Sent to Finance ✅ (saved in Finance transactions)");
+  }
+
+  function sendRevenueToFinance() {
+    pushFinanceTx({
+      date: event.date || todayISO(),
+      type: "Income",
+      category: "Event Revenue",
+      description: `${event.eventName} – ${event.clientName}`,
+      amount: revenue,
+      refEventId: event.id,
+      refEventName: event.eventName,
+      createdBy: user.name,
+    });
+  }
+
+  function sendVendorCostToFinance() {
+    pushFinanceTx({
+      date: event.date || todayISO(),
+      type: "Expense",
+      category: "Vendor Payouts",
+      description: `${event.eventName} – Vendors total`,
+      amount: vendorTotal,
+      refEventId: event.id,
+      refEventName: event.eventName,
+      createdBy: user.name,
+    });
+  }
 
   return (
     <div className="eventura-event-detail">
       <div className="eventura-header-row">
-        <div style={{ minWidth: 0 }}>
-          <h2 className="eventura-panel-title" style={{ marginBottom: 4 }}>
-            {event.eventName}
-          </h2>
-          <p className="eventura-subtitle" style={{ marginTop: 0 }}>
-            {event.clientName} · {event.city} · {event.eventType} · Owner: {event.owner}
+        <div>
+          <h2 className="eventura-panel-title">{event.eventName}</h2>
+          <p className="eventura-subtitle">
+            {event.clientName} · {event.city} · {event.eventType}
           </p>
         </div>
 
         <div style={{ textAlign: "right" }}>
-          <div className={"eventura-tag " + statusColor(event.status)}>
-            {stage} · {progress}%
+          <span className={"eventura-tag " + phaseTagClass(phase)}>{phase}</span>
+          <div style={{ marginTop: "0.35rem" }}>
+            <button
+              type="button"
+              className="eventura-tag eventura-tag-amber"
+              onClick={toggleCancelled}
+              title="Mark Cancelled / Un-cancel"
+            >
+              {event.cancelled ? "Un-cancel" : "Cancel"}
+            </button>
           </div>
-          {daysToEvent != null && (
-            <div style={{ marginTop: 6, color: "#9ca3af", fontSize: "0.78rem" }}>
-              {daysToEvent >= 0 ? `Event in ${daysToEvent} day(s)` : `Event was ${Math.abs(daysToEvent)} day(s) ago`}
+        </div>
+      </div>
+
+      {/* LIVE TRACKING CARD */}
+      <div className="eventura-card" style={{ marginTop: "0.7rem" }}>
+        <div className="eventura-card-label">Live track record</div>
+        <div className="eventura-card-value">{phase}</div>
+
+        <div style={{ marginTop: "0.5rem", width: "100%" }}>
+          <div
+            style={{
+              height: "10px",
+              borderRadius: "999px",
+              background: "rgba(255,255,255,0.08)",
+              overflow: "hidden",
+            }}
+          >
+            <div
+              style={{
+                height: "100%",
+                width: `${progress}%`,
+                background: "rgba(168,85,247,0.9)",
+              }}
+            />
+          </div>
+          <div className="eventura-card-note" style={{ marginTop: "0.4rem" }}>
+            Auto-calculated from event date (no manual status mistakes).
+          </div>
+        </div>
+      </div>
+
+      {/* SMART TIMELINE */}
+      <div style={{ marginTop: "0.9rem" }}>
+        <h3 className="eventura-panel-title">Smart timeline</h3>
+        <p className="eventura-small-text">
+          Auto-generated steps for planning & execution. Updates if you change event date.
+        </p>
+
+        <ul className="eventura-list" style={{ marginTop: "0.4rem" }}>
+          {timeline.map((t) => (
+            <li key={t.label} className="eventura-list-item">
+              <div>
+                <div className="eventura-list-title">{t.label}</div>
+                <div className="eventura-list-sub">Target: {t.displayDate}</div>
+              </div>
+              <span className={"eventura-tag " + (t.isPast ? "eventura-tag-amber" : "eventura-tag-green")}>
+                {t.isPast ? "Check" : "Upcoming"}
+              </span>
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      {/* FINANCE CONNECTION */}
+      <div style={{ marginTop: "1rem" }}>
+        <h3 className="eventura-panel-title">Finance connection</h3>
+        <p className="eventura-small-text">
+          Revenue from budget + Vendor payouts become event P&L. You can send both into Finance tab automatically.
+        </p>
+
+        <div className="eventura-kpi-row" style={{ marginTop: "0.6rem" }}>
+          <div className="eventura-card">
+            <div className="eventura-card-label">Quoted / Revenue</div>
+            <div className="eventura-card-value">₹{formatINR(revenue)}</div>
+            <div className="eventura-card-note">
+              Suggested: ₹{formatINR(suggestedBudget)} (~₹{formatINR(basePerHead)}/guest)
+            </div>
+          </div>
+
+          <div className="eventura-card">
+            <div className="eventura-card-label">Vendor cost</div>
+            <div className="eventura-card-value">₹{formatINR(vendorTotal)}</div>
+            <div className="eventura-card-note">From vendors list</div>
+          </div>
+
+          {isCEO && (
+            <div className="eventura-card">
+              <div className="eventura-card-label">Profit / Margin</div>
+              <div className="eventura-card-value">₹{formatINR(profit)}</div>
+              <div className="eventura-card-note">{margin.toFixed(1)}% margin</div>
             </div>
           )}
         </div>
-      </div>
 
-      {/* Progress Bar */}
-      <div style={{ marginTop: 10 }}>
-        <div style={{ height: 10, background: "rgba(148,163,184,0.25)", borderRadius: 999 }}>
-          <div
-            style={{
-              width: `${clamp(progress, 0, 100)}%`,
-              height: "100%",
-              borderRadius: 999,
-              background: "rgba(139,92,246,0.95)",
-            }}
-          />
-        </div>
-      </div>
-
-      {/* Quick actions */}
-      <div className="eventura-actions" style={{ marginTop: 12, gap: 8, flexWrap: "wrap" }}>
-        <button type="button" className="eventura-button-secondary" onClick={markPlanning}>
-          Move to Planning
-        </button>
-        <button type="button" className="eventura-button-secondary" onClick={markExecutionStart}>
-          Start Execution
-        </button>
-        <button type="button" className="eventura-button" onClick={markCompleted}>
-          Mark Completed
-        </button>
-        <button type="button" className="eventura-tag eventura-tag-blue" onClick={recordAdvanceToFinance}>
-          Sync Advance to Finance
-        </button>
-
-        {isCEO && (
-          <Link className="eventura-tag eventura-tag-green" href="/finance">
-            Open Finance (Review)
+        <div className="eventura-actions" style={{ marginTop: "0.6rem", display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+          <button type="button" className="eventura-button-secondary" onClick={sendRevenueToFinance}>
+            Send Revenue to Finance
+          </button>
+          <button type="button" className="eventura-button-secondary" onClick={sendVendorCostToFinance}>
+            Send Vendor Cost to Finance
+          </button>
+          <Link href="/finance" className="eventura-button-secondary">
+            Open Finance tab
           </Link>
-        )}
+        </div>
       </div>
 
-      {/* KPI Cards */}
-      <div className="eventura-kpi-row" style={{ marginTop: 12 }}>
-        <div className="eventura-card">
-          <div className="eventura-card-label">Revenue (₹)</div>
-          <div className="eventura-card-value">₹{formatINR(revenue)}</div>
-          <div className="eventura-card-note">Budget / expected collection</div>
-        </div>
-        <div className="eventura-card">
-          <div className="eventura-card-label">Advance (₹)</div>
-          <div className="eventura-card-value">₹{formatINR(advance)}</div>
-          <div className="eventura-card-note">Sync button adds Income tx</div>
-        </div>
-        <div className="eventura-card">
-          <div className="eventura-card-label">Vendor cost (₹)</div>
-          <div className="eventura-card-value">₹{formatINR(vendorTotal)}</div>
-          <div className="eventura-card-note">Paid → Expense tx auto</div>
-        </div>
-        {isCEO && (
-          <div className="eventura-card">
-            <div className="eventura-card-label">Margin</div>
-            <div className="eventura-card-value">{revenue > 0 ? margin.toFixed(1) : "–"}%</div>
-            <div className="eventura-card-note">Profit: ₹{formatINR(Math.max(0, profit))}</div>
-          </div>
-        )}
-      </div>
-
-      {/* Checklist + Vendors + Issues + Activity */}
-      <div className="eventura-columns" style={{ marginTop: 16 }}>
-        {/* Checklist */}
-        <div className="eventura-panel" style={{ background: "transparent" }}>
-          <h3 className="eventura-panel-title">Live checklist</h3>
-          <p className="eventura-small-text">
-            Tick tasks as you finish them. Progress updates automatically.
-          </p>
-
-          <div style={{ marginTop: 10 }}>
-            <div className="eventura-small-text" style={{ marginBottom: 6, color: "#9ca3af" }}>
-              Planning
-            </div>
-            <ul className="eventura-list">
-              {checklist
-                .filter((c) => c.phase === "Planning")
-                .map((c) => (
-                  <li key={c.id} className="eventura-list-item">
-                    <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                      <input
-                        type="checkbox"
-                        checked={c.done}
-                        onChange={() => toggleChecklist(c.id)}
-                      />
-                      <div className="eventura-list-title" style={{ textDecoration: c.done ? "line-through" : "none" }}>
-                        {c.text}
-                      </div>
-                    </div>
-                    <span className={"eventura-tag " + (c.done ? "eventura-tag-green" : "eventura-tag-amber")}>
-                      {c.done ? "Done" : "Pending"}
-                    </span>
-                  </li>
-                ))}
-            </ul>
-
-            <div className="eventura-small-text" style={{ margin: "10px 0 6px", color: "#9ca3af" }}>
-              Execution
-            </div>
-            <ul className="eventura-list">
-              {checklist
-                .filter((c) => c.phase === "Execution")
-                .map((c) => (
-                  <li key={c.id} className="eventura-list-item">
-                    <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                      <input
-                        type="checkbox"
-                        checked={c.done}
-                        onChange={() => toggleChecklist(c.id)}
-                      />
-                      <div className="eventura-list-title" style={{ textDecoration: c.done ? "line-through" : "none" }}>
-                        {c.text}
-                      </div>
-                    </div>
-                    <span className={"eventura-tag " + (c.done ? "eventura-tag-green" : "eventura-tag-amber")}>
-                      {c.done ? "Done" : "Pending"}
-                    </span>
-                  </li>
-                ))}
-            </ul>
-          </div>
-        </div>
-
+      {/* VENDORS + ISSUES */}
+      <div
+        className="eventura-columns"
+        style={{
+          marginTop: "1rem",
+          gridTemplateColumns: "minmax(0,1.1fr) minmax(0,1fr)",
+        }}
+      >
         {/* Vendors */}
         <div className="eventura-panel" style={{ background: "transparent" }}>
           <h3 className="eventura-panel-title">Vendors & payouts</h3>
           <p className="eventura-small-text">
-            Mark vendor <b>Paid</b> to auto-create an Expense transaction in Finance.
+            Add vendors and amounts. This total is used as event cost.
           </p>
 
-          <form className="eventura-form" onSubmit={handleAddVendor} style={{ marginTop: 10 }}>
+          <form className="eventura-form" onSubmit={handleAddVendor} style={{ marginTop: "0.5rem" }}>
             <div className="eventura-form-grid">
               <div className="eventura-field">
                 <input
@@ -1251,7 +961,7 @@ function EventDetail({
               </div>
             </div>
 
-            <div className="eventura-form-grid" style={{ marginTop: 8 }}>
+            <div className="eventura-form-grid" style={{ marginTop: "0.4rem" }}>
               <div className="eventura-field">
                 <input
                   className="eventura-input"
@@ -1274,23 +984,25 @@ function EventDetail({
               </div>
             </div>
 
-            <div className="eventura-actions" style={{ marginTop: 8 }}>
+            <div className="eventura-actions" style={{ marginTop: "0.4rem" }}>
               <button type="submit" className="eventura-button-secondary">
                 + Add vendor
               </button>
             </div>
           </form>
 
-          <div className="eventura-table-wrapper" style={{ marginTop: 12 }}>
+          <div className="eventura-table-wrapper" style={{ marginTop: "0.6rem" }}>
             {(event.vendors ?? []).length === 0 ? (
-              <p style={{ fontSize: "0.8rem", color: "#9ca3af" }}>No vendors yet.</p>
+              <p style={{ fontSize: "0.8rem", color: "#9ca3af" }}>
+                No vendors added yet.
+              </p>
             ) : (
               <table className="eventura-table">
                 <thead>
                   <tr>
                     <th>Vendor</th>
                     <th>Category</th>
-                    <th>Amount</th>
+                    <th>Amount (₹)</th>
                     <th>Status</th>
                     <th />
                   </tr>
@@ -1300,7 +1012,7 @@ function EventDetail({
                     <tr key={v.id}>
                       <td>{v.name}</td>
                       <td>{v.category}</td>
-                      <td>₹{formatINR(parseMoney(v.amount))}</td>
+                      <td>{v.amount}</td>
                       <td>
                         <select
                           className="eventura-input"
@@ -1329,15 +1041,17 @@ function EventDetail({
             )}
           </div>
         </div>
-      </div>
 
-      {/* Issues + Activity */}
-      <div className="eventura-columns" style={{ marginTop: 16 }}>
+        {/* Issues */}
         <div className="eventura-panel" style={{ background: "transparent" }}>
           <h3 className="eventura-panel-title">Issues & on-ground alerts</h3>
+          <p className="eventura-small-text">
+            Staff can note problems like delays, shortages, vendor issues.
+          </p>
+
           <form
             onSubmit={handleAddIssue}
-            style={{ marginTop: 10, display: "flex", gap: "0.4rem" }}
+            style={{ marginTop: "0.5rem", display: "flex", gap: "0.4rem" }}
           >
             <input
               className="eventura-input"
@@ -1345,14 +1059,14 @@ function EventDetail({
               value={issueDraft}
               onChange={(e) => setIssueDraft(e.target.value)}
             />
-            <button type="submit" className="eventura-button-secondary">
-              + Add
-            </button>
+            <button type="submit" className="eventura-button-secondary">+ Add</button>
           </form>
 
-          <ul className="eventura-list" style={{ marginTop: 12 }}>
+          <ul className="eventura-list" style={{ marginTop: "0.6rem" }}>
             {(event.issues ?? []).length === 0 ? (
-              <p style={{ fontSize: "0.8rem", color: "#9ca3af" }}>No issues reported.</p>
+              <p style={{ fontSize: "0.8rem", color: "#9ca3af" }}>
+                No issues reported yet.
+              </p>
             ) : (
               (event.issues ?? []).map((iss) => (
                 <li key={iss.id} className="eventura-list-item">
@@ -1364,9 +1078,7 @@ function EventDetail({
                   </div>
                   <button
                     type="button"
-                    className={
-                      "eventura-tag " + (iss.status === "Open" ? "eventura-tag-amber" : "eventura-tag-green")
-                    }
+                    className={"eventura-tag " + (iss.status === "Open" ? "eventura-tag-amber" : "eventura-tag-green")}
                     onClick={() => handleToggleIssue(iss.id)}
                   >
                     {iss.status === "Open" ? "Mark resolved" : "Re-open"}
@@ -1376,41 +1088,12 @@ function EventDetail({
             )}
           </ul>
         </div>
-
-        <div className="eventura-panel" style={{ background: "transparent" }}>
-          <h3 className="eventura-panel-title">Activity log</h3>
-          <p className="eventura-small-text">Every major action is recorded here for live tracking.</p>
-
-          <ul className="eventura-list" style={{ marginTop: 12 }}>
-            {(event.activity ?? []).length === 0 ? (
-              <p style={{ fontSize: "0.8rem", color: "#9ca3af" }}>No activity yet.</p>
-            ) : (
-              (event.activity ?? []).slice(0, 30).map((a) => (
-                <li key={a.id} className="eventura-list-item">
-                  <div>
-                    <div className="eventura-list-title">{a.action}</div>
-                    <div className="eventura-list-sub">
-                      {new Date(a.at).toLocaleString("en-IN")} · by {a.by}
-                    </div>
-                  </div>
-                  <span className="eventura-tag eventura-tag-blue">LOG</span>
-                </li>
-              ))
-            )}
-          </ul>
-        </div>
-      </div>
-
-      <div style={{ marginTop: 14, color: "#9ca3af", fontSize: "0.75rem" }}>
-        Started: {event.startedAt ? new Date(event.startedAt).toLocaleString("en-IN") : "—"} · Completed:{" "}
-        {event.completedAt ? new Date(event.completedAt).toLocaleString("en-IN") : "—"}
       </div>
     </div>
   );
 }
 
-/* ===================== SHARED SIDEBAR/TOPBAR ===================== */
-
+/* ===================== SHARED UI ===================== */
 function SidebarCore({ user, active }: { user: User; active: string }) {
   const isCEO = user.role === "CEO";
   return (
@@ -1422,6 +1105,7 @@ function SidebarCore({ user, active }: { user: User; active: string }) {
           <div className="eventura-logo-tagline">Events that speak your style</div>
         </div>
       </div>
+
       <nav className="eventura-sidebar-nav">
         <SidebarLink href="/" label="Dashboard" icon="📊" active={active === "dashboard"} />
         <SidebarLink href="/events" label="Events" icon="🎉" active={active === "events"} />
@@ -1434,6 +1118,7 @@ function SidebarCore({ user, active }: { user: User; active: string }) {
         {isCEO && <SidebarLink href="/reports" label="Reports & Analytics" icon="📈" active={active === "reports"} />}
         {isCEO && <SidebarLink href="/settings" label="Settings & Access" icon="⚙️" active={active === "settings"} />}
       </nav>
+
       <div className="eventura-sidebar-footer">
         <div className="eventura-sidebar-role">Role: {user.role === "CEO" ? "CEO / Super Admin" : "Staff"}</div>
         <div className="eventura-sidebar-city">City: {user.city}</div>
@@ -1452,9 +1137,7 @@ function TopbarCore({ user }: { user: User }) {
         <input className="eventura-search" placeholder="Search events, clients, vendors..." />
       </div>
       <div className="eventura-topbar-right">
-        <button className="eventura-topbar-icon" title="Notifications">
-          🔔
-        </button>
+        <button className="eventura-topbar-icon" title="Notifications">🔔</button>
         <div className="eventura-user-avatar" title={user.name}>
           {user.name.charAt(0).toUpperCase()}
         </div>
