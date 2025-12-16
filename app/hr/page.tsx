@@ -3,18 +3,10 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 
-/* ========= Shared types ========= */
+/* ================== TYPES ================== */
 
 type Role = "CEO" | "Staff";
 type User = { name: string; role: Role; city: string };
-
-const USER_KEY = "eventura-user";
-
-/* HR DB keys */
-const DB_HR_TEAM = "eventura-hr-team-v2";
-const DB_HR_CANDIDATES = "eventura-hr-candidates-v2";
-const DB_HR_TRAINING = "eventura-hr-training-v2";
-const DB_HR_AUDIT = "eventura-hr-audit-v2";
 
 type StaffRole =
   | "Event Manager"
@@ -33,10 +25,10 @@ type TeamMember = {
   role: StaffRole;
   city: string;
   status: StaffStatus;
-  workload: number; // % utilization
-  monthlySalary: number; // 0 for freelancers, trainees can have stipend
+  workload: number; // 0–100
+  monthlySalary: number; // 0 if freelancer
   eventsThisMonth: number;
-  rating: number; // 1–5
+  rating: number; // 0–5
   skills: string[];
   createdAt?: string;
   updatedAt?: string;
@@ -83,9 +75,10 @@ type AuditItem = {
     | "ADD_MEMBER"
     | "EDIT_MEMBER"
     | "DELETE_MEMBER"
+    | "DEACTIVATE_MEMBER"
     | "BULK_IMPORT"
     | "EXPORT"
-    | "RESET";
+    | "CLEAR_ALL";
   detail: string;
 };
 
@@ -96,78 +89,20 @@ type HRSummary = {
   inactiveCount: number;
   totalCost: number;
   avgWorkload: number;
-  roleCounts: Record<StaffRole, number>;
   weddingsCapacity: number;
   corporatesCapacity: number;
+  overloaded: TeamMember[];
+  underutilized: TeamMember[];
 };
 
-/* ========= Demo data (ONLY loaded if CEO clicks "Load Demo Data") ========= */
+/* ================== STORAGE KEYS ================== */
 
-const seedTeam: TeamMember[] = [
-  {
-    id: 1,
-    name: "Hardik Vekariya",
-    role: "Operations",
-    city: "Surat",
-    status: "Core",
-    workload: 82,
-    monthlySalary: 0,
-    eventsThisMonth: 6,
-    rating: 5,
-    skills: ["Strategy", "Finance", "Vendor Negotiation"],
-  },
-  {
-    id: 2,
-    name: "Shubh Parekh",
-    role: "Event Manager",
-    city: "Surat",
-    status: "Core",
-    workload: 88,
-    monthlySalary: 55000,
-    eventsThisMonth: 5,
-    rating: 4.7,
-    skills: ["Client Handling", "Planning", "Budgeting"],
-  },
-  {
-    id: 3,
-    name: "Dixit Bhuva",
-    role: "Marketing",
-    city: "Surat",
-    status: "Core",
-    workload: 76,
-    monthlySalary: 45000,
-    eventsThisMonth: 3,
-    rating: 4.5,
-    skills: ["Digital Marketing", "Social Media", "Leads"],
-  },
-];
+const DB_HR_TEAM = "eventura-hr-team-v3";
+const DB_HR_CANDIDATES = "eventura-hr-candidates-v3";
+const DB_HR_TRAINING = "eventura-hr-training-v3";
+const DB_HR_AUDIT = "eventura-hr-audit-v3";
 
-const seedCandidates: Candidate[] = [
-  {
-    id: 101,
-    name: "Neha Joshi",
-    role: "Event Manager",
-    city: "Surat",
-    expectedSalary: 42000,
-    stage: "Interviewed",
-    fitScore: 88,
-    notes: "Strong client handling + calendar planning",
-  },
-];
-
-const seedTraining: TrainingItem[] = [
-  {
-    id: 201,
-    title: "Premium client handling",
-    roleTarget: "Event Manager",
-    assignee: "Trainee Planner",
-    status: "Completed",
-    beforeScore: 5,
-    afterScore: 8,
-  },
-];
-
-/* ========= Helpers ========= */
+/* ================== HELPERS ================== */
 
 function nowISO() {
   return new Date().toISOString();
@@ -182,6 +117,10 @@ function safeParse<T>(raw: string | null): T | null {
   }
 }
 
+function clamp(n: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, n));
+}
+
 function gaugeColor(value: number): string {
   if (value < 60) return "eventura-tag-green";
   if (value <= 85) return "eventura-tag-blue";
@@ -194,14 +133,19 @@ function workloadLabel(value: number): string {
   return "Overloaded";
 }
 
-function clamp(n: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, n));
+function currencyINR(n: number) {
+  return "₹" + (n || 0).toLocaleString("en-IN");
 }
 
-/* ========= Page ========= */
+/* ================== PAGE ================== */
 
 export default function HRPage() {
-  const [user, setUser] = useState<User | null>(null);
+  // ✅ LOGIN REMOVED: direct access user
+  const [user, setUser] = useState<User>({
+    name: "Hardik Vekariya",
+    role: "CEO",
+    city: "Surat",
+  });
 
   const [team, setTeam] = useState<TeamMember[]>([]);
   const [candidates, setCandidates] = useState<Candidate[]>([]);
@@ -212,7 +156,7 @@ export default function HRPage() {
     "overview" | "directory" | "hiring" | "training" | "audit"
   >("overview");
 
-  // Directory filters
+  // Filters
   const [q, setQ] = useState("");
   const [filterRole, setFilterRole] = useState<StaffRole | "All">("All");
   const [filterStatus, setFilterStatus] = useState<StaffStatus | "All">("All");
@@ -224,22 +168,11 @@ export default function HRPage() {
 
   const importRef = useRef<HTMLInputElement | null>(null);
 
-  // Auth + load DB (EMPTY by default; NO auto seed)
+  const isCEO = user.role === "CEO";
+
+  // Load from localStorage (EMPTY by default)
   useEffect(() => {
     if (typeof window === "undefined") return;
-
-    const raw = window.localStorage.getItem(USER_KEY);
-    if (!raw) {
-      window.location.href = "/login";
-      return;
-    }
-    const u = safeParse<User>(raw);
-    if (!u) {
-      window.localStorage.removeItem(USER_KEY);
-      window.location.href = "/login";
-      return;
-    }
-    setUser(u);
 
     const savedTeam = safeParse<TeamMember[]>(
       window.localStorage.getItem(DB_HR_TEAM)
@@ -254,67 +187,34 @@ export default function HRPage() {
       window.localStorage.getItem(DB_HR_AUDIT)
     );
 
-    // IMPORTANT: default to EMPTY arrays (no demo unless user clicks)
-    setTeam(
-      (savedTeam && Array.isArray(savedTeam) ? savedTeam : []).map((m) => ({
-        ...m,
-        createdAt: m.createdAt ?? nowISO(),
-        updatedAt: m.updatedAt ?? nowISO(),
-      }))
-    );
-
-    setCandidates(
-      (savedCandidates && Array.isArray(savedCandidates) ? savedCandidates : []).map(
-        (c) => ({
-          ...c,
-          createdAt: c.createdAt ?? nowISO(),
-          updatedAt: c.updatedAt ?? nowISO(),
-        })
-      )
-    );
-
-    setTraining(
-      (savedTraining && Array.isArray(savedTraining) ? savedTraining : []).map(
-        (t) => ({
-          ...t,
-          createdAt: t.createdAt ?? nowISO(),
-          updatedAt: t.updatedAt ?? nowISO(),
-        })
-      )
-    );
-
-    setAudit(savedAudit && Array.isArray(savedAudit) ? savedAudit : []);
+    setTeam(Array.isArray(savedTeam) ? savedTeam : []);
+    setCandidates(Array.isArray(savedCandidates) ? savedCandidates : []);
+    setTraining(Array.isArray(savedTraining) ? savedTraining : []);
+    setAudit(Array.isArray(savedAudit) ? savedAudit : []);
   }, []);
 
-  // Persist DB
+  // Persist
   useEffect(() => {
     if (typeof window === "undefined") return;
-    if (!user) return;
     window.localStorage.setItem(DB_HR_TEAM, JSON.stringify(team));
-  }, [team, user]);
+  }, [team]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    if (!user) return;
     window.localStorage.setItem(DB_HR_CANDIDATES, JSON.stringify(candidates));
-  }, [candidates, user]);
+  }, [candidates]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    if (!user) return;
     window.localStorage.setItem(DB_HR_TRAINING, JSON.stringify(training));
-  }, [training, user]);
+  }, [training]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    if (!user) return;
     window.localStorage.setItem(DB_HR_AUDIT, JSON.stringify(audit));
-  }, [audit, user]);
-
-  const isCEO = user?.role === "CEO";
+  }, [audit]);
 
   const pushAudit = (action: AuditItem["action"], detail: string) => {
-    if (!user) return;
     const item: AuditItem = {
       id: Date.now(),
       ts: nowISO(),
@@ -331,28 +231,15 @@ export default function HRPage() {
     const trainees = team.filter((m) => m.status === "Trainee");
     const inactive = team.filter((m) => m.status === "Inactive");
 
-    const totalCoreCost = core.reduce((sum, m) => sum + (m.monthlySalary || 0), 0);
+    const totalCoreCost = core.reduce((s, m) => s + (m.monthlySalary || 0), 0);
     const totalTraineeCost = trainees.reduce(
-      (sum, m) => sum + (m.monthlySalary || 0),
+      (s, m) => s + (m.monthlySalary || 0),
       0
     );
     const totalCost = totalCoreCost + totalTraineeCost;
 
     const avgWorkload =
-      core.reduce((sum, m) => sum + (m.workload || 0), 0) / (core.length || 1);
-
-    const roleCounts: Record<StaffRole, number> = {
-      "Event Manager": 0,
-      "Decor Specialist": 0,
-      Logistics: 0,
-      Marketing: 0,
-      Sales: 0,
-      Accountant: 0,
-      Operations: 0,
-    };
-    core.forEach((m) => {
-      roleCounts[m.role] = (roleCounts[m.role] || 0) + 1;
-    });
+      core.reduce((s, m) => s + (m.workload || 0), 0) / (core.length || 1);
 
     const eventManagers = core.filter((m) => m.role === "Event Manager").length;
     const decor = core.filter((m) => m.role === "Decor Specialist").length;
@@ -361,6 +248,9 @@ export default function HRPage() {
     const weddingsCapacity = Math.min(eventManagers * 3, decor * 3, logistics * 3);
     const corporatesCapacity = Math.min(eventManagers * 2, decor * 2, logistics * 3);
 
+    const overloaded = core.filter((m) => m.workload >= 90).sort((a, b) => b.workload - a.workload);
+    const underutilized = core.filter((m) => m.workload < 60).sort((a, b) => a.workload - b.workload);
+
     return {
       coreCount: core.length,
       freelancersCount: freelancers.length,
@@ -368,9 +258,10 @@ export default function HRPage() {
       inactiveCount: inactive.length,
       totalCost,
       avgWorkload: Math.round(avgWorkload || 0),
-      roleCounts,
       weddingsCapacity,
       corporatesCapacity,
+      overloaded,
+      underutilized,
     };
   }, [team]);
 
@@ -394,23 +285,15 @@ export default function HRPage() {
         const matchesCity = filterCity === "All" || m.city === filterCity;
         return matchesQ && matchesRole && matchesStatus && matchesCity;
       })
-      .sort((a, b) => {
-        const aInactive = a.status === "Inactive" ? 1 : 0;
-        const bInactive = b.status === "Inactive" ? 1 : 0;
-        if (aInactive !== bInactive) return aInactive - bInactive;
-        return (b.workload || 0) - (a.workload || 0);
-      });
+      .sort((a, b) => (b.workload || 0) - (a.workload || 0));
   }, [team, q, filterRole, filterStatus, filterCity]);
 
-  if (!user) return null;
-
-  /* ===== CRUD: Team Members ===== */
+  /* ================== ACTIONS ================== */
 
   const openAddMember = () => {
     setMemberEditing(null);
     setMemberModalOpen(true);
   };
-
   const openEditMember = (m: TeamMember) => {
     setMemberEditing(m);
     setMemberModalOpen(true);
@@ -418,7 +301,6 @@ export default function HRPage() {
 
   const upsertMember = (payload: TeamMember) => {
     if (!isCEO) return;
-
     const ts = nowISO();
 
     setTeam((prev) => {
@@ -442,18 +324,7 @@ export default function HRPage() {
     setMemberEditing(null);
   };
 
-  const deleteMember = (id: number) => {
-    if (!isCEO) return;
-    const m = team.find((x) => x.id === id);
-    if (!m) return;
-    const ok = window.confirm(`Delete ${m.name}? This cannot be undone.`);
-    if (!ok) return;
-
-    setTeam((prev) => prev.filter((x) => x.id !== id));
-    pushAudit("DELETE_MEMBER", `Deleted: ${m.name} (${m.role}, ${m.status})`);
-  };
-
-  const softDeactivate = (id: number) => {
+  const deactivateMember = (id: number) => {
     if (!isCEO) return;
     const m = team.find((x) => x.id === id);
     if (!m) return;
@@ -462,22 +333,28 @@ export default function HRPage() {
         x.id === id ? { ...x, status: "Inactive", updatedAt: nowISO() } : x
       )
     );
-    pushAudit("EDIT_MEMBER", `Deactivated: ${m.name}`);
+    pushAudit("DEACTIVATE_MEMBER", `Deactivated: ${m.name}`);
+  };
+
+  const deleteMember = (id: number) => {
+    if (!isCEO) return;
+    const m = team.find((x) => x.id === id);
+    if (!m) return;
+    const ok = window.confirm(`Delete ${m.name}? This cannot be undone.`);
+    if (!ok) return;
+
+    setTeam((prev) => prev.filter((x) => x.id !== id));
+    pushAudit("DELETE_MEMBER", `Deleted: ${m.name}`);
   };
 
   const exportJSON = () => {
-    const blob = {
-      exportedAt: nowISO(),
-      team,
-      candidates,
-      training,
-    };
+    const blob = { exportedAt: nowISO(), team, candidates, training };
     const text = JSON.stringify(blob, null, 2);
     const a = document.createElement("a");
     a.href = URL.createObjectURL(new Blob([text], { type: "application/json" }));
     a.download = `eventura-hr-export-${new Date().toISOString().slice(0, 10)}.json`;
     a.click();
-    pushAudit("EXPORT", "Exported HR data JSON");
+    pushAudit("EXPORT", "Exported HR JSON");
   };
 
   const triggerImport = () => {
@@ -501,37 +378,65 @@ export default function HRPage() {
       if (parsed.training && Array.isArray(parsed.training))
         setTraining(parsed.training);
 
-      pushAudit("BULK_IMPORT", `Imported HR JSON: ${file.name}`);
+      pushAudit("BULK_IMPORT", `Imported: ${file.name}`);
       alert("Import successful ✅");
     } catch {
-      alert("Import failed. Please upload a valid JSON export.");
+      alert("Import failed. Upload a valid Eventura HR export JSON.");
     } finally {
       if (importRef.current) importRef.current.value = "";
     }
   };
 
-  // NEW: clear HR data (empty)
-  const clearHRData = () => {
+  const clearAll = () => {
     if (!isCEO) return;
-    const ok = window.confirm("Clear ALL HR data? This removes team/candidates/training.");
+    const ok = window.confirm("Clear ALL HR data? (team/candidates/training/audit)");
     if (!ok) return;
     setTeam([]);
     setCandidates([]);
     setTraining([]);
-    pushAudit("RESET", "Cleared HR database to empty");
+    setAudit([]);
+    pushAudit("CLEAR_ALL", "Cleared all HR data"); // will re-add one item, but audit was cleared; ok.
   };
 
-  // NEW: load demo data ONLY on click
-  const loadDemoData = () => {
-    if (!isCEO) return;
-    const ok = window.confirm("Load demo HR data? This will overwrite current HR data.");
-    if (!ok) return;
+  /* ================== “AUTO FEATURES” (MODERN HELPERS) ================== */
 
-    setTeam(seedTeam.map((m) => ({ ...m, createdAt: nowISO(), updatedAt: nowISO() })));
-    setCandidates(seedCandidates.map((c) => ({ ...c, createdAt: nowISO(), updatedAt: nowISO() })));
-    setTraining(seedTraining.map((t) => ({ ...t, createdAt: nowISO(), updatedAt: nowISO() })));
-    pushAudit("RESET", "Loaded demo HR seed data");
-  };
+  const smartSuggestions = useMemo(() => {
+    const core = team.filter((m) => m.status === "Core");
+    const hasEM = core.some((m) => m.role === "Event Manager");
+    const hasDecor = core.some((m) => m.role === "Decor Specialist");
+    const hasLogistics = core.some((m) => m.role === "Logistics");
+
+    const suggestions: { tag: string; text: string }[] = [];
+
+    if (!hasEM) suggestions.push({ tag: "Critical", text: "Add at least 1 core Event Manager to run events smoothly." });
+    if (!hasDecor) suggestions.push({ tag: "Critical", text: "Add 1 core Decor Specialist to maintain premium design quality." });
+    if (!hasLogistics) suggestions.push({ tag: "Critical", text: "Add 1 logistics core member for execution + vendor coordination." });
+
+    if (summary.overloaded.length) {
+      suggestions.push({
+        tag: "Burnout",
+        text: `Workload > 90%: ${summary.overloaded.map((m) => m.name).join(", ")}. Add freelancer support or redistribute.`,
+      });
+    }
+    if (summary.underutilized.length) {
+      suggestions.push({
+        tag: "Optimize",
+        text: `Under-utilized staff: ${summary.underutilized.map((m) => m.name).join(", ")}. Assign more events or training.`,
+      });
+    }
+
+    if (summary.totalCost > 200000) {
+      suggestions.push({ tag: "Cost", text: "Salary run-rate is high. Track HR cost vs revenue in Finance tab weekly." });
+    }
+
+    if (!team.length) {
+      suggestions.push({ tag: "Start", text: "No HR data yet. Click “Add Member” to build your core team." });
+    }
+
+    return suggestions.slice(0, 6);
+  }, [team, summary]);
+
+  /* ================== RENDER ================== */
 
   return (
     <main className="eventura-os">
@@ -548,57 +453,42 @@ export default function HRPage() {
             <div>
               <h1 className="eventura-page-title">HR & Crew Control</h1>
               <p className="eventura-subtitle">
-                HR dashboard: editable directory, capacity, hiring, training, audit.
+                Modern HR dashboard: capacity, hiring, training, searchable directory + audit log.
               </p>
             </div>
 
             <div className="eventura-chips-row">
               <button
                 type="button"
-                className={
-                  "eventura-tag " +
-                  (view === "overview" ? "eventura-tag-blue" : "eventura-tag-amber")
-                }
+                className={"eventura-tag " + (view === "overview" ? "eventura-tag-blue" : "eventura-tag-amber")}
                 onClick={() => setView("overview")}
               >
                 Overview
               </button>
               <button
                 type="button"
-                className={
-                  "eventura-tag " +
-                  (view === "directory" ? "eventura-tag-blue" : "eventura-tag-amber")
-                }
+                className={"eventura-tag " + (view === "directory" ? "eventura-tag-blue" : "eventura-tag-amber")}
                 onClick={() => setView("directory")}
               >
-                Directory (Editable)
+                Directory
               </button>
               <button
                 type="button"
-                className={
-                  "eventura-tag " +
-                  (view === "hiring" ? "eventura-tag-blue" : "eventura-tag-amber")
-                }
+                className={"eventura-tag " + (view === "hiring" ? "eventura-tag-blue" : "eventura-tag-amber")}
                 onClick={() => setView("hiring")}
               >
                 Hiring
               </button>
               <button
                 type="button"
-                className={
-                  "eventura-tag " +
-                  (view === "training" ? "eventura-tag-blue" : "eventura-tag-amber")
-                }
+                className={"eventura-tag " + (view === "training" ? "eventura-tag-blue" : "eventura-tag-amber")}
                 onClick={() => setView("training")}
               >
                 Training
               </button>
               <button
                 type="button"
-                className={
-                  "eventura-tag " +
-                  (view === "audit" ? "eventura-tag-blue" : "eventura-tag-amber")
-                }
+                className={"eventura-tag " + (view === "audit" ? "eventura-tag-blue" : "eventura-tag-amber")}
                 onClick={() => setView("audit")}
               >
                 Audit
@@ -606,47 +496,20 @@ export default function HRPage() {
             </div>
           </div>
 
-          {/* Actions */}
+          {/* Quick Actions */}
           <section className="eventura-panel" style={{ marginBottom: "0.9rem" }}>
-            <div className="eventura-actions" style={{ display: "flex", gap: "0.6rem", flexWrap: "wrap" }}>
-              <button
-                className="eventura-button"
-                disabled={!isCEO}
-                title={!isCEO ? "CEO only" : "Add new team member"}
-                onClick={openAddMember}
-              >
+            <div className="eventura-actions" style={{ display: "flex", gap: "0.6rem", flexWrap: "wrap", alignItems: "center" }}>
+              <button className="eventura-button" onClick={openAddMember}>
                 ➕ Add Member
               </button>
-
               <button className="eventura-button-secondary" onClick={exportJSON}>
                 ⬇ Export JSON
               </button>
-
-              <button
-                className="eventura-button-secondary"
-                disabled={!isCEO}
-                title={!isCEO ? "CEO only" : "Import HR data JSON"}
-                onClick={triggerImport}
-              >
+              <button className="eventura-button-secondary" onClick={triggerImport}>
                 ⬆ Import JSON
               </button>
-
-              <button
-                className="eventura-button-secondary"
-                disabled={!isCEO}
-                title={!isCEO ? "CEO only" : "Clear all HR data"}
-                onClick={clearHRData}
-              >
-                🧹 Clear HR Data
-              </button>
-
-              <button
-                className="eventura-button-secondary"
-                disabled={!isCEO}
-                title={!isCEO ? "CEO only" : "Load demo data (optional)"}
-                onClick={loadDemoData}
-              >
-                🧪 Load Demo Data
+              <button className="eventura-button-secondary" onClick={clearAll}>
+                🧹 Clear All HR Data
               </button>
 
               <input
@@ -657,41 +520,74 @@ export default function HRPage() {
                 onChange={(e) => onImportFile(e.target.files?.[0] ?? null)}
               />
 
-              {!isCEO && (
-                <span className="eventura-small-text">
-                  🔒 Staff has read-only access. Login as CEO to edit.
-                </span>
-              )}
+              <span className="eventura-small-text" style={{ marginLeft: "auto" }}>
+                Access mode: <span className="eventura-tag eventura-tag-green">Direct (Login Disabled)</span>
+              </span>
             </div>
           </section>
 
-          {team.length === 0 && view !== "directory" && (
-            <section className="eventura-panel" style={{ marginBottom: "0.9rem" }}>
-              <h2 className="eventura-panel-title">No HR data yet</h2>
-              <p className="eventura-small-text">
-                Your HR database is empty. Add members or import data to start.
-              </p>
-              <div className="eventura-actions" style={{ display: "flex", gap: "0.6rem", flexWrap: "wrap" }}>
-                <button className="eventura-button" disabled={!isCEO} onClick={openAddMember}>
-                  ➕ Add first member
-                </button>
-                <button className="eventura-button-secondary" disabled={!isCEO} onClick={triggerImport}>
-                  ⬆ Import JSON
-                </button>
-                <button className="eventura-button-secondary" disabled={!isCEO} onClick={loadDemoData}>
-                  🧪 Load Demo Data
-                </button>
+          {/* Modern “Auto Features” Panel */}
+          <section className="eventura-columns" style={{ marginBottom: "0.9rem" }}>
+            <div className="eventura-panel">
+              <h2 className="eventura-panel-title">Auto insights</h2>
+              <div className="eventura-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" }}>
+                <div className="eventura-card eventura-card-glow">
+                  <p className="eventura-card-label">Salary run-rate</p>
+                  <p className="eventura-card-value">{currencyINR(summary.totalCost)}</p>
+                  <p className="eventura-card-note">Core salary + trainee stipends.</p>
+                </div>
+                <div className="eventura-card eventura-card-glow">
+                  <p className="eventura-card-label">Avg workload</p>
+                  <p className="eventura-card-value">{summary.avgWorkload}%</p>
+                  <p className="eventura-card-note">{workloadLabel(summary.avgWorkload)}</p>
+                </div>
+                <div className="eventura-card eventura-card-glow">
+                  <p className="eventura-card-label">Capacity (30 days)</p>
+                  <p className="eventura-card-value">
+                    {summary.weddingsCapacity} weddings · {summary.corporatesCapacity} corporates
+                  </p>
+                  <p className="eventura-card-note">Based on Event Manager + Decor + Logistics core.</p>
+                </div>
+                <div className="eventura-card eventura-card-glow">
+                  <p className="eventura-card-label">Headcount</p>
+                  <p className="eventura-card-value">{summary.coreCount} core</p>
+                  <p className="eventura-card-note">
+                    Freelancers: {summary.freelancersCount} · Trainees: {summary.traineesCount} · Inactive: {summary.inactiveCount}
+                  </p>
+                </div>
               </div>
-            </section>
-          )}
+            </div>
 
-          {view === "overview" && (
-            <HROverviewView summary={summary} team={team} />
-          )}
+            <div className="eventura-panel">
+              <h2 className="eventura-panel-title">Smart suggestions</h2>
+              {smartSuggestions.length ? (
+                <ul className="eventura-bullets">
+                  {smartSuggestions.map((s, idx) => (
+                    <li key={idx}>
+                      <span className={"eventura-tag " + (s.tag === "Critical" ? "eventura-tag-amber" : s.tag === "Burnout" ? "eventura-tag-amber" : "eventura-tag-blue")}>
+                        {s.tag}
+                      </span>{" "}
+                      {s.text}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="eventura-small-text">No suggestions right now.</p>
+              )}
+
+              <div className="eventura-actions" style={{ marginTop: "0.8rem" }}>
+                <Link href="/finance" className="eventura-button-secondary">
+                  Open Finance (HR cost vs revenue)
+                </Link>
+              </div>
+            </div>
+          </section>
+
+          {/* Views */}
+          {view === "overview" && <OverviewView team={team} summary={summary} />}
 
           {view === "directory" && (
-            <HRDirectoryView
-              isCEO={!!isCEO}
+            <DirectoryView
               team={filteredTeam}
               allTeam={team}
               q={q}
@@ -704,23 +600,20 @@ export default function HRPage() {
               setFilterCity={setFilterCity}
               cities={cities}
               onEdit={openEditMember}
+              onDeactivate={deactivateMember}
               onDelete={deleteMember}
-              onDeactivate={softDeactivate}
             />
           )}
 
-          {view === "hiring" && <HRHiringView candidates={candidates} team={team} />}
+          {view === "hiring" && <HiringView candidates={candidates} />}
 
-          {view === "training" && (
-            <HRTrainingView training={training} team={team} />
-          )}
+          {view === "training" && <TrainingView team={team} training={training} />}
 
-          {view === "audit" && <HRAuditView audit={audit} />}
+          {view === "audit" && <AuditView audit={audit} />}
 
-          {/* Member modal */}
+          {/* Modal */}
           {memberModalOpen && (
             <MemberModal
-              isCEO={!!isCEO}
               onClose={() => {
                 setMemberModalOpen(false);
                 setMemberEditing(null);
@@ -735,112 +628,83 @@ export default function HRPage() {
   );
 }
 
-/* ========= Views ========= */
+/* ================== SUB VIEWS ================== */
 
-function HROverviewView({ summary, team }: { summary: HRSummary; team: TeamMember[] }) {
-  const roles: StaffRole[] = [
-    "Event Manager",
-    "Decor Specialist",
-    "Logistics",
-    "Marketing",
-    "Sales",
-    "Accountant",
-    "Operations",
-  ];
-
-  const roleHeat = roles.map((role) => {
-    const members = team.filter((m) => m.role === role && m.status === "Core");
-    if (members.length === 0) return { role, count: 0, avgWorkload: 0 };
-    const avg =
-      members.reduce((sum, m) => sum + (m.workload || 0), 0) / members.length;
-    return { role, count: members.length, avgWorkload: Math.round(avg) };
-  });
+function OverviewView({ team, summary }: { team: TeamMember[]; summary: HRSummary }) {
+  const topPerformers = useMemo(() => {
+    return [...team]
+      .filter((m) => m.status === "Core")
+      .sort((a, b) => (b.rating || 0) - (a.rating || 0))
+      .slice(0, 5);
+  }, [team]);
 
   return (
-    <>
-      <section className="eventura-grid">
-        <div className="eventura-card eventura-card-glow">
-          <p className="eventura-card-label">Headcount</p>
-          <p className="eventura-card-value">{summary.coreCount} core</p>
-          <p className="eventura-card-note">
-            Freelancers: {summary.freelancersCount} · Trainees: {summary.traineesCount} · Inactive: {summary.inactiveCount}
-          </p>
-        </div>
+    <section className="eventura-columns">
+      <div className="eventura-panel">
+        <h2 className="eventura-panel-title">Operations view</h2>
+        <ul className="eventura-bullets">
+          <li>
+            <span className="eventura-tag eventura-tag-blue">Workload</span>{" "}
+            Keep core workload between 60–85% for best execution quality.
+          </li>
+          <li>
+            <span className="eventura-tag eventura-tag-blue">Capacity</span>{" "}
+            Capacity is calculated from Event Manager + Decor + Logistics coverage.
+          </li>
+          <li>
+            <span className="eventura-tag eventura-tag-blue">Cost</span>{" "}
+            Track salary run-rate weekly vs booked revenue.
+          </li>
+        </ul>
+      </div>
 
-        <div className="eventura-card eventura-card-glow">
-          <p className="eventura-card-label">Avg core workload</p>
-          <p className="eventura-card-value">{summary.avgWorkload}%</p>
-          <p className="eventura-card-note">{workloadLabel(summary.avgWorkload)}</p>
-        </div>
-
-        <div className="eventura-card eventura-card-glow">
-          <p className="eventura-card-label">Monthly salary run</p>
-          <p className="eventura-card-value">₹{summary.totalCost.toLocaleString("en-IN")}</p>
-          <p className="eventura-card-note">Core salary + trainee stipends only.</p>
-        </div>
-
-        <div className="eventura-card eventura-card-glow">
-          <p className="eventura-card-label">30-day readiness</p>
-          <p className="eventura-card-value">
-            {summary.weddingsCapacity} weddings · {summary.corporatesCapacity} corporates
-          </p>
-          <p className="eventura-card-note">Based on Event Managers / Decor / Logistics coverage.</p>
-        </div>
-      </section>
-
-      <section className="eventura-columns">
-        <div className="eventura-panel">
-          <h2 className="eventura-panel-title">Org heatmap by role</h2>
-          <div className="eventura-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))" }}>
-            {roleHeat.map((r) => (
-              <div key={r.role} className="eventura-card">
-                <p className="eventura-card-label">{r.role}</p>
-                <p className="eventura-card-value">
-                  {r.count} <span style={{ fontSize: "0.75rem", color: "#9ca3af" }}>core</span>
-                </p>
-                <p className="eventura-card-note">
-                  {r.count === 0 ? (
-                    <span className="eventura-tag eventura-tag-amber">No core staff</span>
-                  ) : (
-                    <span className={"eventura-tag " + gaugeColor(r.avgWorkload)}>
-                      {r.avgWorkload}% · {workloadLabel(r.avgWorkload)}
-                    </span>
-                  )}
-                </p>
-              </div>
-            ))}
+      <div className="eventura-panel">
+        <h2 className="eventura-panel-title">Top performers</h2>
+        {topPerformers.length ? (
+          <div className="eventura-table-wrapper">
+            <table className="eventura-table">
+              <thead>
+                <tr>
+                  <th>Member</th>
+                  <th>Role</th>
+                  <th>Rating</th>
+                  <th>Workload</th>
+                </tr>
+              </thead>
+              <tbody>
+                {topPerformers.map((m) => (
+                  <tr key={m.id}>
+                    <td>
+                      <div className="eventura-list-title">{m.name}</div>
+                      <div className="eventura-list-sub">{m.city}</div>
+                    </td>
+                    <td>{m.role}</td>
+                    <td>{(m.rating || 0).toFixed(1)}/5</td>
+                    <td>
+                      <span className={"eventura-tag " + gaugeColor(m.workload || 0)}>
+                        {m.workload}% · {workloadLabel(m.workload || 0)}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
-        </div>
+        ) : (
+          <p className="eventura-small-text">No core team yet. Add members to see ranking.</p>
+        )}
 
-        <div className="eventura-panel">
-          <h2 className="eventura-panel-title">Alerts</h2>
-          <ul className="eventura-bullets">
-            {team.filter((m) => m.status === "Core" && m.workload >= 90).length > 0 ? (
-              <li>
-                <span className="eventura-tag eventura-tag-amber">Burnout risk</span>{" "}
-                {team
-                  .filter((m) => m.status === "Core" && m.workload >= 90)
-                  .map((m) => m.name)
-                  .join(", ")}
-              </li>
-            ) : (
-              <li><span className="eventura-tag eventura-tag-green">Healthy</span> No core staff over 90% workload.</li>
-            )}
-          </ul>
-
-          <div className="eventura-actions" style={{ marginTop: "0.8rem" }}>
-            <Link href="/finance" className="eventura-button-secondary">
-              Open Finance (HR cost vs revenue)
-            </Link>
-          </div>
+        <div className="eventura-actions" style={{ marginTop: "0.8rem" }}>
+          <Link href="/events" className="eventura-button-secondary">
+            Open Events (assign crew)
+          </Link>
         </div>
-      </section>
-    </>
+      </div>
+    </section>
   );
 }
 
-function HRDirectoryView(props: {
-  isCEO: boolean;
+function DirectoryView(props: {
   team: TeamMember[];
   allTeam: TeamMember[];
   q: string;
@@ -853,8 +717,8 @@ function HRDirectoryView(props: {
   setFilterCity: (v: string) => void;
   cities: string[];
   onEdit: (m: TeamMember) => void;
-  onDelete: (id: number) => void;
   onDeactivate: (id: number) => void;
+  onDelete: (id: number) => void;
 }) {
   const roles: (StaffRole | "All")[] = [
     "All",
@@ -868,16 +732,13 @@ function HRDirectoryView(props: {
   ];
   const statuses: (StaffStatus | "All")[] = ["All", "Core", "Freelancer", "Trainee", "Inactive"];
 
-  const totalShown = props.team.length;
-  const totalAll = props.allTeam.length;
-
   return (
     <section className="eventura-panel">
       <div className="eventura-header-row" style={{ alignItems: "flex-end" }}>
         <div>
           <h2 className="eventura-panel-title">Team Directory</h2>
           <p className="eventura-small-text">
-            Showing {totalShown} of {totalAll}. Search + filters. CEO can edit/delete.
+            Showing {props.team.length} of {props.allTeam.length}. Search + filters.
           </p>
         </div>
 
@@ -913,7 +774,7 @@ function HRDirectoryView(props: {
               <th>Salary</th>
               <th>Rating</th>
               <th>Skills</th>
-              <th style={{ width: 210 }}>Actions</th>
+              <th style={{ width: 240 }}>Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -926,43 +787,43 @@ function HRDirectoryView(props: {
                 </td>
                 <td>{m.role}</td>
                 <td>
-                  <span className={"eventura-tag " + (m.status === "Core" ? "eventura-tag-green" : m.status === "Inactive" ? "eventura-tag-amber" : "eventura-tag-blue")}>
+                  <span
+                    className={
+                      "eventura-tag " +
+                      (m.status === "Core"
+                        ? "eventura-tag-green"
+                        : m.status === "Inactive"
+                        ? "eventura-tag-amber"
+                        : "eventura-tag-blue")
+                    }
+                  >
                     {m.status}
                   </span>
                 </td>
                 <td>
-                  <span className={"eventura-tag " + gaugeColor(m.workload)}>
-                    {m.workload}% · {workloadLabel(m.workload)}
+                  <span className={"eventura-tag " + gaugeColor(m.workload || 0)}>
+                    {m.workload}% · {workloadLabel(m.workload || 0)}
                   </span>
                 </td>
                 <td>{m.eventsThisMonth}</td>
-                <td>{m.monthlySalary ? `₹${m.monthlySalary.toLocaleString("en-IN")}` : "—"}</td>
-                <td>{m.rating.toFixed(1)}/5</td>
-                <td><div className="eventura-small-text">{(m.skills || []).join(", ")}</div></td>
+                <td>{m.monthlySalary ? currencyINR(m.monthlySalary) : "—"}</td>
+                <td>{(m.rating || 0).toFixed(1)}/5</td>
+                <td>
+                  <div className="eventura-small-text">{(m.skills || []).join(", ")}</div>
+                </td>
                 <td>
                   <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap" }}>
-                    <button
-                      className="eventura-button-secondary"
-                      disabled={!props.isCEO}
-                      title={!props.isCEO ? "CEO only" : "Edit"}
-                      onClick={() => props.onEdit(m)}
-                    >
+                    <button className="eventura-button-secondary" onClick={() => props.onEdit(m)}>
                       ✏ Edit
                     </button>
                     <button
                       className="eventura-button-secondary"
-                      disabled={!props.isCEO || m.status === "Inactive"}
-                      title={!props.isCEO ? "CEO only" : "Deactivate"}
+                      disabled={m.status === "Inactive"}
                       onClick={() => props.onDeactivate(m.id)}
                     >
                       📴 Deactivate
                     </button>
-                    <button
-                      className="eventura-button-secondary"
-                      disabled={!props.isCEO}
-                      title={!props.isCEO ? "CEO only" : "Delete"}
-                      onClick={() => props.onDelete(m.id)}
-                    >
+                    <button className="eventura-button-secondary" onClick={() => props.onDelete(m.id)}>
                       🗑 Delete
                     </button>
                   </div>
@@ -972,7 +833,7 @@ function HRDirectoryView(props: {
             {props.team.length === 0 && (
               <tr>
                 <td colSpan={9} style={{ color: "#9ca3af" }}>
-                  No team members yet. Add a member (CEO) or import JSON.
+                  No team members yet. Click “Add Member”.
                 </td>
               </tr>
             )}
@@ -983,96 +844,36 @@ function HRDirectoryView(props: {
   );
 }
 
-function HRHiringView({ candidates, team }: { candidates: Candidate[]; team: TeamMember[] }) {
+function HiringView({ candidates }: { candidates: Candidate[] }) {
   const stages: HiringStage[] = ["Sourced", "Shortlisted", "Interviewed", "Trial Event", "Hired", "Rejected"];
-
-  const coreByRole = useMemo(() => {
-    const map: Record<StaffRole, number> = {
-      "Event Manager": 0,
-      "Decor Specialist": 0,
-      Logistics: 0,
-      Marketing: 0,
-      Sales: 0,
-      Accountant: 0,
-      Operations: 0,
-    };
-    team.filter((m) => m.status === "Core").forEach((m) => {
-      map[m.role] = (map[m.role] || 0) + 1;
-    });
-    return map;
-  }, [team]);
+  const counts = useMemo(() => {
+    const m = new Map<HiringStage, number>();
+    stages.forEach((s) => m.set(s, 0));
+    candidates.forEach((c) => m.set(c.stage, (m.get(c.stage) || 0) + 1));
+    return m;
+  }, [candidates]);
 
   return (
-    <section className="eventura-columns">
-      <div className="eventura-panel">
-        <h2 className="eventura-panel-title">Recruitment Kanban</h2>
-        <div className="eventura-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))" }}>
-          {stages.map((stage) => {
-            const stageCandidates = candidates.filter((c) => c.stage === stage);
-            return (
-              <div key={stage} className="eventura-card">
-                <p className="eventura-card-label">{stage}</p>
-                <p className="eventura-card-value">
-                  {stageCandidates.length}{" "}
-                  <span style={{ fontSize: "0.75rem", color: "#9ca3af" }}>candidate(s)</span>
-                </p>
-                <ul className="eventura-bullets" style={{ marginTop: "0.4rem" }}>
-                  {stageCandidates.length === 0 && (
-                    <li style={{ color: "#9ca3af", fontSize: "0.8rem" }}>No candidates yet.</li>
-                  )}
-                  {stageCandidates.map((c) => (
-                    <li key={c.id}>
-                      {c.name} – {c.role} ·{" "}
-                      <span className={"eventura-tag " + (c.fitScore >= 85 ? "eventura-tag-green" : c.fitScore >= 70 ? "eventura-tag-blue" : "eventura-tag-amber")}>
-                        {c.fitScore} fit
-                      </span>
-                      {c.notes ? <div className="eventura-small-text" style={{ marginTop: 2 }}>{c.notes}</div> : null}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            );
-          })}
-        </div>
+    <section className="eventura-panel">
+      <h2 className="eventura-panel-title">Hiring (Kanban summary)</h2>
+      <div className="eventura-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))" }}>
+        {stages.map((s) => (
+          <div key={s} className="eventura-card">
+            <p className="eventura-card-label">{s}</p>
+            <p className="eventura-card-value">{counts.get(s) || 0}</p>
+            <p className="eventura-card-note">Candidates</p>
+          </div>
+        ))}
       </div>
 
-      <div className="eventura-panel">
-        <h2 className="eventura-panel-title">Role coverage</h2>
-        <div className="eventura-table-wrapper">
-          <table className="eventura-table">
-            <thead>
-              <tr>
-                <th>Role</th>
-                <th>Core count</th>
-                <th>Comment</th>
-              </tr>
-            </thead>
-            <tbody>
-              {Object.entries(coreByRole).map(([role, count]) => {
-                let comment = "Healthy";
-                if (role === "Event Manager" && count < 2) comment = "Hire 1 more in next 6–9 months.";
-                if (role === "Decor Specialist" && count < 1) comment = "Critical to hire at least 1 ASAP.";
-                if (role === "Logistics" && count < 1) comment = "Need strong logistics core for scale.";
-                return (
-                  <tr key={role}>
-                    <td>{role}</td>
-                    <td>{count}</td>
-                    <td>{comment}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-        <p className="eventura-small-text" style={{ marginTop: "0.6rem" }}>
-          Add candidates via import (or we can add CRUD for candidates next).
-        </p>
-      </div>
+      <p className="eventura-small-text" style={{ marginTop: "0.6rem" }}>
+        (Next upgrade: add candidates CRUD + “convert to staff” one click.)
+      </p>
     </section>
   );
 }
 
-function HRTrainingView({ training, team }: { training: TrainingItem[]; team: TeamMember[] }) {
+function TrainingView({ team, training }: { team: TeamMember[]; training: TrainingItem[] }) {
   return (
     <section className="eventura-columns">
       <div className="eventura-panel">
@@ -1084,7 +885,7 @@ function HRTrainingView({ training, team }: { training: TrainingItem[]; team: Te
                 <th>Member</th>
                 <th>Role</th>
                 <th>Status</th>
-                <th>Key skills</th>
+                <th>Skills</th>
                 <th>Rating</th>
               </tr>
             </thead>
@@ -1098,13 +899,13 @@ function HRTrainingView({ training, team }: { training: TrainingItem[]; team: Te
                   <td>{m.role}</td>
                   <td>{m.status}</td>
                   <td><div className="eventura-small-text">{(m.skills || []).join(", ")}</div></td>
-                  <td>{m.rating.toFixed(1)}/5</td>
+                  <td>{(m.rating || 0).toFixed(1)}/5</td>
                 </tr>
               ))}
               {team.length === 0 && (
                 <tr>
                   <td colSpan={5} style={{ color: "#9ca3af" }}>
-                    Add members first to see skill matrix.
+                    Add members to see the skill matrix.
                   </td>
                 </tr>
               )}
@@ -1120,7 +921,7 @@ function HRTrainingView({ training, team }: { training: TrainingItem[]; team: Te
             <thead>
               <tr>
                 <th>Program</th>
-                <th>Role target</th>
+                <th>Role Target</th>
                 <th>Assignee</th>
                 <th>Status</th>
                 <th>Impact</th>
@@ -1145,7 +946,7 @@ function HRTrainingView({ training, team }: { training: TrainingItem[]; team: Te
               {training.length === 0 && (
                 <tr>
                   <td colSpan={5} style={{ color: "#9ca3af" }}>
-                    No training programs yet. Import or we can add CRUD next.
+                    No training items yet.
                   </td>
                 </tr>
               )}
@@ -1157,11 +958,11 @@ function HRTrainingView({ training, team }: { training: TrainingItem[]; team: Te
   );
 }
 
-function HRAuditView({ audit }: { audit: AuditItem[] }) {
+function AuditView({ audit }: { audit: AuditItem[] }) {
   return (
     <section className="eventura-panel">
       <h2 className="eventura-panel-title">Audit log</h2>
-      <p className="eventura-small-text">Tracks HR changes. Latest first.</p>
+      <p className="eventura-small-text">Latest actions first.</p>
 
       <div className="eventura-table-wrapper" style={{ marginTop: "0.6rem" }}>
         <table className="eventura-table">
@@ -1185,7 +986,7 @@ function HRAuditView({ audit }: { audit: AuditItem[] }) {
             {audit.length === 0 && (
               <tr>
                 <td colSpan={4} style={{ color: "#9ca3af" }}>
-                  No actions yet.
+                  No audit entries yet.
                 </td>
               </tr>
             )}
@@ -1196,10 +997,9 @@ function HRAuditView({ audit }: { audit: AuditItem[] }) {
   );
 }
 
-/* ========= Modal ========= */
+/* ================== MODAL ================== */
 
 function MemberModal(props: {
-  isCEO: boolean;
   onClose: () => void;
   onSave: (m: TeamMember) => void;
   initial: TeamMember | null;
@@ -1225,15 +1025,9 @@ function MemberModal(props: {
   const [rating, setRating] = useState<number>(props.initial?.rating ?? 4.0);
   const [skills, setSkills] = useState<string>((props.initial?.skills ?? []).join(", "));
 
-  const canEdit = props.isCEO;
-
   const save = () => {
-    if (!canEdit) return;
     const cleanName = name.trim();
-    if (!cleanName) {
-      alert("Name is required");
-      return;
-    }
+    if (!cleanName) return alert("Name is required.");
 
     const id = props.initial?.id ?? Date.now();
 
@@ -1247,13 +1041,9 @@ function MemberModal(props: {
       monthlySalary: Math.max(0, Number(monthlySalary) || 0),
       eventsThisMonth: Math.max(0, Number(eventsThisMonth) || 0),
       rating: clamp(Number(rating) || 0, 0, 5),
-      skills: skills
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean)
-        .slice(0, 12),
-      createdAt: props.initial?.createdAt,
-      updatedAt: props.initial?.updatedAt,
+      skills: skills.split(",").map((s) => s.trim()).filter(Boolean).slice(0, 12),
+      createdAt: props.initial?.createdAt ?? nowISO(),
+      updatedAt: nowISO(),
     });
   };
 
@@ -1266,79 +1056,73 @@ function MemberModal(props: {
               {props.initial ? "Edit member" : "Add member"}
             </h2>
             <p className="eventura-small-text" style={{ marginTop: 6 }}>
-              {canEdit ? "Saves into local HR database." : "Read-only"}
+              Saved to local HR database.
             </p>
           </div>
-          <button className="eventura-button-secondary" onClick={props.onClose}>
-            ✕ Close
-          </button>
+          <button className="eventura-button-secondary" onClick={props.onClose}>✕ Close</button>
         </div>
 
         <div className="eventura-grid" style={{ marginTop: "0.6rem" }}>
           <div className="eventura-card">
             <p className="eventura-card-label">Name</p>
-            <input className="eventura-search" value={name} onChange={(e) => setName(e.target.value)} disabled={!canEdit} />
+            <input className="eventura-search" value={name} onChange={(e) => setName(e.target.value)} />
           </div>
 
           <div className="eventura-card">
             <p className="eventura-card-label">Role</p>
-            <select className="eventura-search" value={role} onChange={(e) => setRole(e.target.value as StaffRole)} disabled={!canEdit}>
+            <select className="eventura-search" value={role} onChange={(e) => setRole(e.target.value as StaffRole)}>
               {roles.map((r) => <option key={r} value={r}>{r}</option>)}
             </select>
           </div>
 
           <div className="eventura-card">
             <p className="eventura-card-label">Status</p>
-            <select className="eventura-search" value={status} onChange={(e) => setStatus(e.target.value as StaffStatus)} disabled={!canEdit}>
+            <select className="eventura-search" value={status} onChange={(e) => setStatus(e.target.value as StaffStatus)}>
               {statuses.map((s) => <option key={s} value={s}>{s}</option>)}
             </select>
           </div>
 
           <div className="eventura-card">
             <p className="eventura-card-label">City</p>
-            <input className="eventura-search" value={city} onChange={(e) => setCity(e.target.value)} disabled={!canEdit} />
+            <input className="eventura-search" value={city} onChange={(e) => setCity(e.target.value)} />
           </div>
 
           <div className="eventura-card">
             <p className="eventura-card-label">Workload %</p>
-            <input className="eventura-search" type="number" value={workload} onChange={(e) => setWorkload(Number(e.target.value))} disabled={!canEdit} />
+            <input className="eventura-search" type="number" value={workload} onChange={(e) => setWorkload(Number(e.target.value))} />
           </div>
 
           <div className="eventura-card">
             <p className="eventura-card-label">Events this month</p>
-            <input className="eventura-search" type="number" value={eventsThisMonth} onChange={(e) => setEventsThisMonth(Number(e.target.value))} disabled={!canEdit} />
+            <input className="eventura-search" type="number" value={eventsThisMonth} onChange={(e) => setEventsThisMonth(Number(e.target.value))} />
           </div>
 
           <div className="eventura-card">
             <p className="eventura-card-label">Monthly salary (₹)</p>
-            <input className="eventura-search" type="number" value={monthlySalary} onChange={(e) => setMonthlySalary(Number(e.target.value))} disabled={!canEdit} />
+            <input className="eventura-search" type="number" value={monthlySalary} onChange={(e) => setMonthlySalary(Number(e.target.value))} />
           </div>
 
           <div className="eventura-card">
             <p className="eventura-card-label">Rating (0–5)</p>
-            <input className="eventura-search" type="number" value={rating} onChange={(e) => setRating(Number(e.target.value))} disabled={!canEdit} />
+            <input className="eventura-search" type="number" value={rating} onChange={(e) => setRating(Number(e.target.value))} />
           </div>
 
           <div className="eventura-card" style={{ gridColumn: "1 / -1" }}>
             <p className="eventura-card-label">Skills (comma separated)</p>
-            <input className="eventura-search" value={skills} onChange={(e) => setSkills(e.target.value)} disabled={!canEdit} />
+            <input className="eventura-search" value={skills} onChange={(e) => setSkills(e.target.value)} />
           </div>
         </div>
 
         <div className="eventura-actions" style={{ marginTop: "0.8rem", display: "flex", gap: "0.6rem" }}>
-          <button className="eventura-button" disabled={!canEdit} onClick={save}>
-            💾 Save
-          </button>
-          <button className="eventura-button-secondary" onClick={props.onClose}>
-            Cancel
-          </button>
+          <button className="eventura-button" onClick={save}>💾 Save</button>
+          <button className="eventura-button-secondary" onClick={props.onClose}>Cancel</button>
         </div>
       </div>
     </div>
   );
 }
 
-/* ========= Shared layout: sidebar + topbar ========= */
+/* ================== SIDEBAR + TOPBAR ================== */
 
 function SidebarCore({ user, active }: { user: User; active: string }) {
   const isCEO = user.role === "CEO";
