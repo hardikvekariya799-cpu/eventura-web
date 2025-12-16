@@ -1,51 +1,20 @@
 "use client";
 
-import React, { useState } from "react";
+import { useState } from "react";
 
-type Role = "CEO" | "Staff";
-
-type UserRecord = {
-  email: string;
-  password: string;
-  name: string;
-  role: Role;
-  city: string;
-};
-
-type StoredUser = {
-  name: string;
-  role: Role;
-  city: string;
-};
-
-const USER_KEY = "eventura-user";
-
-/**
- * Your real login accounts.
- *
- * CEO LOGIN:
- *   Email: ceo@eventura.in
- *   Password: Eventura@123
- *
- * STAFF LOGIN:
- *   Email: staff@eventura.in
- *   Password: Eventura@123
- *
- * (These are NOT shown on UI now, only here in code.)
- */
-const USERS: UserRecord[] = [
+const USERS = [
   {
-    email: "ceo@eventura.in",
-    password: "Eventura@123",
-    name: "Hardik Vekariya",
+    email: "ceo@eventura.com",
+    password: "Eventura@2025",
     role: "CEO",
+    name: "Hardik Vekariya",
     city: "Surat",
   },
   {
-    email: "staff@eventura.in",
-    password: "Eventura@123",
-    name: "Event Manager",
+    email: "staff@eventura.com",
+    password: "Eventura123",
     role: "Staff",
+    name: "Eventura Staff",
     city: "Surat",
   },
 ];
@@ -53,226 +22,57 @@ const USERS: UserRecord[] = [
 export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState("");
 
-  function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setError(null);
-
-    const trimmedEmail = email.trim().toLowerCase();
-    const trimmedPass = password.trim();
-
-    const found = USERS.find(
-      (u) =>
-        u.email.toLowerCase() === trimmedEmail && u.password === trimmedPass
+  const login = () => {
+    const user = USERS.find(
+      (u) => u.email === email && u.password === password
     );
 
-    if (!found) {
-      setError("Invalid login ID or password. Please try again.");
+    if (!user) {
+      setError("Invalid email or password");
       return;
     }
 
-    const storedUser: StoredUser = {
-      name: found.name,
-      role: found.role,
-      city: found.city,
-    };
+    sessionStorage.setItem(
+      "eventura-user",
+      JSON.stringify({
+        name: user.name,
+        role: user.role,
+        city: user.city,
+      })
+    );
 
-    if (typeof window !== "undefined") {
-      window.localStorage.setItem(USER_KEY, JSON.stringify(storedUser));
-      window.location.href = "/";
-    }
-  }
+    window.location.href = "/";
+  };
 
   return (
-    <main
-      style={{
-        minHeight: "100vh",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        background:
-          "radial-gradient(circle at top, #1f2937 0, #020617 45%, #000 100%)",
-        color: "#e5e7eb",
-        fontFamily:
-          'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-        padding: "1.5rem",
-      }}
-    >
-      <div
-        style={{
-          width: "100%",
-          maxWidth: "420px",
-          background:
-            "radial-gradient(circle at top left, #1e293b 0, #020617 45%)",
-          borderRadius: "1.5rem",
-          padding: "1.75rem 1.75rem 1.5rem",
-          border: "1px solid #111827",
-          boxShadow: "0 24px 60px rgba(0,0,0,0.8)",
-        }}
-      >
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            marginBottom: "1.25rem",
-            gap: "0.75rem",
-          }}
-        >
-          <div
-            style={{
-              width: "40px",
-              height: "40px",
-              borderRadius: "999px",
-              background:
-                "radial-gradient(circle at 30% 10%, #facc15 0, #a855f7 40%, #0ea5e9 100%)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              fontWeight: 700,
-              fontSize: "1.1rem",
-              color: "#020617",
-            }}
-          >
-            E
-          </div>
-          <div>
-            <div
-              style={{
-                fontSize: "1.1rem",
-                fontWeight: 600,
-                letterSpacing: "-0.03em",
-              }}
-            >
-              Eventura OS
-            </div>
-            <div style={{ fontSize: "0.75rem", color: "#9ca3af" }}>
-              Events that speak your style
-            </div>
-          </div>
+    <main className="eventura-login">
+      <div className="eventura-login-card">
+        <h1>Eventura OS</h1>
+        <p>Secure Login</p>
+
+        <input
+          placeholder="Email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+        />
+
+        <input
+          placeholder="Password"
+          type="password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+        />
+
+        {error && <div className="error">{error}</div>}
+
+        <button onClick={login}>Login</button>
+
+        <div className="hint">
+          CEO → ceo@eventura.com <br />
+          Staff → staff@eventura.com
         </div>
-
-        <h1
-          style={{
-            fontSize: "1.3rem",
-            fontWeight: 600,
-            marginBottom: "0.25rem",
-          }}
-        >
-          Sign in
-        </h1>
-        <p
-          style={{
-            fontSize: "0.8rem",
-            color: "#9ca3af",
-            marginBottom: "1rem",
-          }}
-        >
-          Use your Eventura login ID and password.
-        </p>
-
-        {error && (
-          <div
-            style={{
-              marginBottom: "0.8rem",
-              padding: "0.55rem 0.7rem",
-              borderRadius: "0.75rem",
-              fontSize: "0.78rem",
-              background: "rgba(248, 113, 113, 0.1)",
-              border: "1px solid rgba(248, 113, 113, 0.5)",
-              color: "#fecaca",
-            }}
-          >
-            {error}
-          </div>
-        )}
-
-        <form
-          onSubmit={handleSubmit}
-          style={{ display: "grid", gap: "0.8rem" }}
-        >
-          <div>
-            <label
-              htmlFor="email"
-              style={{
-                display: "block",
-                fontSize: "0.78rem",
-                marginBottom: "0.25rem",
-                color: "#d1d5db",
-              }}
-            >
-              Login ID (email)
-            </label>
-            <input
-              id="email"
-              type="email"
-              autoComplete="username"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              style={{
-                width: "100%",
-                borderRadius: "0.75rem",
-                padding: "0.55rem 0.75rem",
-                fontSize: "0.82rem",
-                backgroundColor: "#020617",
-                border: "1px solid #1f2937",
-                color: "#e5e7eb",
-                outline: "none",
-              }}
-            />
-          </div>
-
-          <div>
-            <label
-              htmlFor="password"
-              style={{
-                display: "block",
-                fontSize: "0.78rem",
-                marginBottom: "0.25rem",
-                color: "#d1d5db",
-              }}
-            >
-              Password
-            </label>
-            <input
-              id="password"
-              type="password"
-              autoComplete="current-password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              style={{
-                width: "100%",
-                borderRadius: "0.75rem",
-                padding: "0.55rem 0.75rem",
-                fontSize: "0.82rem",
-                backgroundColor: "#020617",
-                border: "1px solid #1f2937",
-                color: "#e5e7eb",
-                outline: "none",
-              }}
-            />
-          </div>
-
-          <button
-            type="submit"
-            style={{
-              marginTop: "0.6rem",
-              width: "100%",
-              borderRadius: "999px",
-              padding: "0.6rem 0.75rem",
-              fontSize: "0.85rem",
-              fontWeight: 600,
-              border: "none",
-              cursor: "pointer",
-              background:
-                "linear-gradient(135deg, #facc15, #eab308, #a855f7)",
-              color: "#111827",
-              boxShadow: "0 16px 30px rgba(250, 204, 21, 0.3)",
-            }}
-          >
-            Sign in
-          </button>
-        </form>
       </div>
     </main>
   );
